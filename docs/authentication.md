@@ -27,8 +27,8 @@ the immutable application user UUID (`u_<uuid-without-hyphens>`), avoiding
 collisions with manually created Synapse accounts. Synapse stores no separate
 user password for this flow.
 
-The browser should keep the app JWT and Matrix access token in memory, not
-local storage. The app refresh cookie is not readable by JavaScript. When
+The browser keeps the app JWT and Matrix access token in memory, not local
+storage. The app refresh cookie is not readable by JavaScript. When
 logging out, send the Matrix access token in the optional `matrix_access_token`
 field to revoke that Synapse session as well as the app refresh-token family.
 App logout still succeeds if Synapse is unavailable.
@@ -59,8 +59,9 @@ for FastAPI and Synapse.
 
 ## Matrix Device and Encryption Keys
 
-The Matrix client SDK owns Matrix session storage, device keys, encrypted-event
-handling, key backup/recovery, and verification UX. Matrix cryptographic keys
-are distinct from JWT signing keys. Loss of Matrix device keys can make
-encrypted history unreadable; key recovery must be designed and tested. E2EE
-has not been implemented or verified by this backend step.
+The current browser Matrix client does not manage device keys or encrypted
+events. A future Matrix SDK integration must own device verification,
+key-backup/recovery, and encryption UX. Matrix cryptographic keys are distinct
+from JWT signing keys. Loss of Matrix device keys can make encrypted history
+unreadable; key recovery must be designed and tested. E2EE has not been
+implemented or verified.

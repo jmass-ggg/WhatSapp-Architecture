@@ -1,13 +1,13 @@
-# Realtime Chat Prototype
+# LumaChat
 
 Development workspace for a Matrix Synapse, FastAPI, React, and PostgreSQL
-chat application. The local Synapse service, FastAPI identity/profile and
-access-control APIs, and unified app-password-to-Matrix login are implemented.
-The React client, Matrix messaging UI, OIDC, media workflows, and E2EE client
-are not part of this backend step.
+chat application. It includes a responsive React interface, FastAPI
+identity/profile and access-control APIs, unified app-password-to-Matrix
+login, and a browser Matrix client for room sync and messaging.
 
 ## Architecture and Boundaries
 
+- [LumaChat frontend setup and integration notes](frontend/README.md)
 - [System architecture](docs/architecture.md)
 - [API boundaries](docs/api-boundaries.md)
 - [Authentication and token boundaries](docs/authentication.md)
@@ -42,6 +42,22 @@ registration is enabled by that helper for local verification. The committed
 For an existing checkout created before unified login, also follow the
 configuration update steps in [Local Synapse setup](docs/synapse-setup.md)
 before testing Matrix login.
+
+## Local Frontend
+
+Start the Synapse and backend services as described above, then run Vite:
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The app uses `http://localhost:8000/api/v1` for
+FastAPI and `http://localhost:8008` for Synapse by default; override them with
+`VITE_API_URL`, `VITE_MATRIX_URL`, and `VITE_MATRIX_SERVER_NAME` in
+`frontend/.env`. A clearly labeled demo preview is available from the login
+page. Live login requires the backend and Synapse services to be running.
 
 The API is loopback-published on port 8000. Use `http://localhost:8000` from a
 browser with the frontend at `http://localhost:5173`, keeping the hostname

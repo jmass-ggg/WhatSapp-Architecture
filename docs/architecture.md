@@ -2,25 +2,25 @@
 
 ## Overview
 
-The browser is both an application client and a Matrix client. React uses
-FastAPI for application-owned identity/profile metadata and business rules,
-while the Matrix JavaScript SDK talks directly to Synapse for conversations
-and client-side encryption. FastAPI login now exchanges a short-lived,
+The browser is both an application client and a Matrix client. The LumaChat
+React frontend uses FastAPI for application identity, profiles, and directory
+search. After app-password validation, FastAPI exchanges a short-lived,
 server-only JWT with Synapse and returns Synapse's Matrix session to the
-browser. The React client and Matrix messaging flows are future work.
+browser. The frontend uses Synapse's Client-Server API for room sync, direct
+room creation, messages, and media. End-to-end encryption is not implemented.
 
 ```mermaid
 flowchart LR
     subgraph Browser["Browser"]
         UI["React + TypeScript"]
         APIClient["Application API client"]
-        MatrixSDK["Matrix JS SDK + crypto store"]
+        MatrixAPI["Matrix Client-Server API client"]
         UI --> APIClient
-        UI --> MatrixSDK
+        UI --> MatrixAPI
     end
 
     APIClient -->|"HTTPS REST + app JWT"| FastAPI["FastAPI"]
-    MatrixSDK -->|"Matrix Client-Server API + Matrix token"| Synapse["Synapse"]
+    MatrixAPI -->|"Matrix Client-Server API + Matrix token"| Synapse["Synapse"]
     FastAPI -->|"Application records"| AppDB[("PostgreSQL: chat_app")]
     Synapse -->|"Homeserver records"| SynapseDB[("PostgreSQL: synapse")]
     FastAPI -->|"Short-lived JWT login assertion"| Synapse
@@ -48,8 +48,8 @@ port is not published to the host.
 
 | Component | Owns |
 | --- | --- |
-| React frontend | Planned authentication screens, one-to-one/group chat views, message history, typing/receipt display, attachments, and encryption UX. Not implemented in this backend step. |
-| Matrix JavaScript SDK (planned: `matrix-js-sdk`) | Owns Matrix session storage, sync, rooms/events, typing, receipts, media API calls, device keys, encryption/decryption, and encrypted attachments. |
+| React frontend | LumaChat login/registration, responsive conversation UI, demo preview, in-memory auth state, Matrix room sync, direct-room creation, text messages, file upload/download, and read receipts. |
+| Browser Matrix API client | Calls Synapse directly for room state, sync, events, and media. It does not provide device-key management, encryption, or decryption. |
 | FastAPI | Owns app registration/login, app JWT and refresh sessions, user/profile APIs, directory visibility, configurable entitlements, and the narrow Synapse JWT login/logout exchange. |
 | Synapse | Matrix users/devices; room membership/state; message delivery and history; synchronization; typing and receipt events; Matrix authentication; media repository/API; federation if explicitly enabled. |
 | PostgreSQL | Separate Synapse and FastAPI containers, databases, non-superuser app roles, private networks, and persistent volumes. |
@@ -66,9 +66,9 @@ Synapse is the source of truth for Matrix data.
    FastAPI-to-Synapse key, and submits it to Synapse's JWT login flow.
 3. Synapse maps the stable app-user UUID to a Matrix localpart, creates that
    Matrix account on first login, and returns its own Matrix access token.
-4. The browser uses the app JWT only with FastAPI and the Matrix access token
-   only with the Matrix SDK. The SDK starts Matrix sync.
-5. The SDK submits messages to Synapse; Synapse persists and routes
+4. The browser keeps both returned credentials in memory, uses the app JWT
+   only with FastAPI, and starts Matrix sync with the Matrix access token.
+5. The browser submits messages to Synapse; Synapse persists and routes
    events to other clients' sync streams.
 6. Typing notifications and read receipts use Matrix APIs, not duplicate
    FastAPI state.
@@ -98,23 +98,20 @@ the same isolation as separate PostgreSQL clusters or hosts.
 
 ## Media
 
-The browser SDK uploads Matrix attachments to Synapse's media API and puts the
-resulting Matrix content URI in the room event. For encrypted rooms, the
-supported SDK encrypts attachment bytes client-side and carries the required
-decryption metadata in the encrypted event. FastAPI should not proxy file bytes
-by default; it may enforce application-specific authorization or quotas on its
-own endpoints. Enforce upload-size limits at the homeserver/proxy and any app
-upload endpoint. Browser downloads must use the SDK's supported authenticated
-media flow when the homeserver requires authorization; do not assume an `mxc:`
-URI can be used as an unauthenticated image URL.
+The browser uploads Matrix attachments to Synapse's media API and places the
+returned Matrix content URI in the room event. Downloads use an authenticated
+request when the homeserver requires it; do not assume an `mxc:` URI can be
+used as an unauthenticated image URL. FastAPI does not proxy file bytes.
+Encrypted attachment handling requires a Matrix SDK with cryptographic
+support and is not implemented.
 
 ## Encryption and Security
 
 For encrypted rooms, plaintext exists in the sending/receiving client process;
 Synapse stores and routes encrypted event payloads. In unencrypted rooms,
 homeservers can read message content. E2EE does not hide all metadata, including
-room membership, event timing, and routing information. Encryption is a planned
-client capability, not implemented or verified in this repository.
+room membership, event timing, and routing information. Encryption is not
+implemented or verified in this repository.
 
 Use HTTPS outside local development, strict CORS origins, secure session
 handling, least-privilege database roles, secret management outside Git,

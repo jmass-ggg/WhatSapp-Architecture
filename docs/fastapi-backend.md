@@ -62,8 +62,10 @@ tokens are not persisted.
 - The in-memory IP rate limiter is a single-process prototype control. Deploy
   behind a trusted proxy and use a shared rate-limit store before scaling.
 
-Application JWTs are not Matrix access tokens. Matrix login, OIDC, token
-exchange, and account provisioning are intentionally not implemented.
+Application JWTs are not Matrix access tokens. After validating the app
+password, `POST /auth/login` exchanges a separate short-lived JWT with Synapse
+and returns a Matrix session. The browser uses that Matrix token directly with
+Synapse; FastAPI does not proxy Matrix rooms or events. OIDC is not implemented.
 
 ## API
 
@@ -72,9 +74,9 @@ All application routes are under `/api/v1`:
 | Method and path | Access | Purpose |
 | --- | --- | --- |
 | `POST /auth/register` | Registration setting | Create a user, profile, and free placeholder entitlement. |
-| `POST /auth/login` | Public, rate-limited | Issue app JWT and HttpOnly refresh cookie. |
+| `POST /auth/login` | Public, rate-limited | Issue app JWT, Matrix session, and HttpOnly refresh cookie. |
 | `POST /auth/refresh` | Refresh cookie | Rotate refresh session and issue a new app JWT. |
-| `POST /auth/logout` | Refresh cookie | Revoke the token family and clear cookie. |
+| `POST /auth/logout` | Refresh cookie | Revoke the token family, optionally revoke the Matrix session, and clear cookie. |
 | `GET /auth/me` | App JWT | Return the authenticated user's account/profile. |
 | `GET /users/me`, `PATCH /users/me` | App JWT | Read or update the caller's email/username. |
 | `GET /users`, `GET /users/search`, `GET /users/{user_id}` | App JWT and directory entitlement | Paginated, organization-scoped user discovery. |
@@ -175,8 +177,11 @@ They do not mutate the Synapse database.
 
 ## Limitations
 
-- OIDC and linkage between app users and Matrix users are future work.
-- Matrix room creation, messaging, media upload, and E2EE are not implemented.
+- OIDC, password recovery, email verification, MFA, and broader account
+  lifecycle workflows are not implemented.
+- The browser supports Matrix sync, direct-room creation, text/file messages,
+  media transfer, and read receipts. Typing transmission, history pagination,
+  moderation, notification delivery, and E2EE are not implemented.
 - The rate limiter is process-local and is not suitable for a multi-worker
   deployment.
 - Registration is unverified email-based prototype behavior; verification,

@@ -46,14 +46,16 @@ synchronization, media, typing, or receipts.
 
 ## Matrix-Owned Operations
 
-The Matrix SDK uses the Matrix Client-Server API directly for:
+The LumaChat browser Matrix client uses the Matrix Client-Server API directly
+for:
 
 - Matrix authentication/session and device management.
 - Direct/group rooms, membership, room state, and message send/history.
 - Incremental synchronization and event delivery.
 - Typing notifications and read receipts.
 - Media upload/download and Matrix content URIs.
-- Device keys, encrypted-room events, and encrypted attachments.
+- Device keys, encrypted-room events, and encrypted attachments are not
+  implemented by this frontend.
 
 Synapse is the source of truth for these operations. The Matrix specification
 defines its own client authentication and access tokens; these are not
@@ -78,15 +80,17 @@ application user UUID rather than a mutable username or email address.
 FastAPI validates the supplied app password and then requests a Matrix session
 from Synapse. If Synapse cannot complete the exchange, login fails closed and
 FastAPI does not issue an app refresh session. The browser uses the app JWT for
-FastAPI and the Matrix access token for its Matrix SDK. On logout, clients can
-send the Matrix access token in the optional request body so FastAPI can revoke
-the Matrix device session and the app refresh-token family.
+FastAPI and the Matrix access token for direct Matrix API calls. On logout,
+clients can send the Matrix access token in the optional request body so
+FastAPI can revoke the Matrix device session and the app refresh-token family.
 
 The app returns short-lived JWTs in JSON and stores refresh tokens only as
 hashes server-side while sending the raw refresh token in an HttpOnly cookie.
 Keep access tokens short-lived, use exact CORS origins, and review CSRF,
 cookie, TLS, and trusted-proxy behavior before production. Matrix session
-credentials belong in the Matrix SDK session/device store. Never log tokens or
+credentials are kept in frontend memory and are not written to local storage.
+Reloading the page requires a new login because the current backend refresh
+route renews only the app JWT, not the Matrix session. Never log tokens or
 expose the shared JWT signing key to the browser.
 
 Synapse's JWT login is a non-standard, server-side flow documented for the
