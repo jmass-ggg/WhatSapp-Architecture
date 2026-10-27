@@ -1,6 +1,6 @@
 # LumaChat — Senior Developer Interview Questions and Answers
 
-**Audit basis:** source and configuration in this checkout, reviewed 2026-10-27. `HEAD` is `b8e0fda` (`main`, also `origin/main`). That commit contains the Step 07 E2EE implementation and test assets, although its subject is “chore: add AI development guidelines.” The working tree also contains uncommitted Step 08 work; see Q5 and Q11.
+**Audit basis:** source and configuration in this checkout, reviewed 2026-10-27. `HEAD` is `d0ed3a0` (`main`, matching `origin/main`). It includes the Step 08 direct-message implementation and browser harness; its parent `b8e0fda` contains the Step 07 E2EE implementation and test assets. The working tree contains the documentation edits for this preparation; application source is clean.
 
 **Verification recorded for this guide:** `npm test` passed 6 frontend test files / 33 tests, and `npm run typecheck` passed on 2026-10-27. The backend suite was not run: its fixture drops and recreates `chat_app_test`. Browser, live Synapse/E2EE, and load tests were not run. Existing E2EE test scripts and documentation are described as test harnesses and assertions, not as fresh successful live results.
 
@@ -136,18 +136,18 @@ This project depends on Matrix rooms, timeline events, SDK-managed sync/reconnec
 
 **Short interview answer (30–45 seconds):**
 
-The app has source paths for application login, Matrix token exchange, organization-scoped user search, Matrix room sync, encrypted text sending, and device/recovery controls. The current frontend unit suite passes 33 tests and TypeScript typecheck passes. I did not run live Synapse or browser tests, and Step 08 remains uncommitted.
+The app has source paths for application login, Matrix token exchange, organization-scoped user search, Matrix room sync, encrypted text sending, and device/recovery controls. The current frontend unit suite passes 33 tests and TypeScript typecheck passes. I did not run live Synapse or browser tests. Step 08 is committed in `d0ed3a0`, but those integration paths remain unverified here.
 
 **Technical explanation:**
 
-The worktree at review time has modifications to `MatrixSecurityDialog.tsx`, `useMatrixRooms.ts`, `ChatPage.tsx`, `rooms.ts`, `rooms.test.ts`, `encryption.ts`, and `encryption.test.ts`, plus an untracked `matrix-step08-browser-test.mjs`. The Step 08 changes reuse an encrypted DM, show/accept invitations, sort/deduplicate invite timeline messages, submit read receipts, require cross-signing before encrypted send, and expose recovery for an untrusted backup. `ChatPage` reads `crossSigningReady` from `MatrixContext`, and the current TypeScript typecheck passes.
+Commit `d0ed3a0` changes `MatrixSecurityDialog.tsx`, `useMatrixRooms.ts`, `ChatPage.tsx`, `rooms.ts`, `rooms.test.ts`, `encryption.ts`, and `encryption.test.ts`, and adds the tracked `matrix-step08-browser-test.mjs`. Step 08 reuses an encrypted DM, shows and accepts invitations, sorts and deduplicates invite timeline messages, submits read receipts, requires cross-signing before encrypted send, and exposes recovery for an untrusted backup. `ChatPage` reads `crossSigningReady` from `MatrixContext`, and the current TypeScript typecheck passes.
 
 Current status by area:
 
 - **Frontend checks run here:** `npm test` passed 6 test files / 33 tests, and `npm run typecheck` passed.
 - **Backend auth, directory and subscription tests:** test code exists, but was not run here; the test fixture destructively drops/recreates `chat_app_test`.
 - **E2EE live/browser checks:** scripts and documented assertions exist; no live/browser test was run for this guide.
-- **Step 08 one-to-one:** current uncommitted source and a new untracked browser test exist; its directory scenario requires Alice and Bob to share an organization.
+- **Step 08 one-to-one:** implementation and browser harness are committed; its directory scenario requires Alice and Bob to share an organization, and the browser test was not run here.
 - **Group UI:** a group creation method and three-user E2EE harness exist, but the current chat UI has no group-creation path.
 - **Attachments:** live attachment sending is explicitly disabled; encrypted media is not implemented.
 - **Production capacity:** no capacity result is established; project docs call load scenarios planning placeholders.
@@ -163,7 +163,7 @@ Current status by area:
 
 **Answer:** No. These are unit tests with mocked Matrix clients. A live test must inspect the event served by Synapse and confirm another device decrypts it.
 
-**Implementation status:** PARTIAL — unit tests and typecheck pass, but the Step 08 work is uncommitted and live integrations remain unverified.
+**Implementation status:** PARTIAL — unit tests and typecheck pass, Step 08 is committed, but live integrations remain unverified and group UI, encrypted media, and production capacity evidence are absent.
 
 ## Part 2 — Database, organizations, and subscribers
 
@@ -302,7 +302,7 @@ They cannot discover each other through the current directory. Registration does
 
 **Technical explanation:**
 
-`RegisterRequest` has email, username, password and optional display name, but no organization. `register_user()` creates `User` without `organization_id`; it also creates a profile and free subscription. `search_users()` uses `User.id == viewer.id` when the viewer has no organization. The new-chat dialog removes the current user from search results, leaving no contact. The untracked Step 08 browser script has an explicit, opt-in `provisionIsolatedOrganization()` helper that checks the generated test identities, inserts a temporary organization and assigns both users. That helper is a test workaround, not an organization onboarding API.
+`RegisterRequest` has email, username, password and optional display name, but no organization. `register_user()` creates `User` without `organization_id`; it also creates a profile and free subscription. `search_users()` uses `User.id == viewer.id` when the viewer has no organization. The new-chat dialog removes the current user from search results, leaving no contact. The committed Step 08 browser script has an explicit, opt-in `provisionIsolatedOrganization()` helper that checks the generated test identities, inserts a temporary organization and assigns both users. That helper is a test workaround, not an organization onboarding API.
 
 **Evidence in my project:**
 
@@ -310,13 +310,13 @@ They cannot discover each other through the current directory. Registration does
 - `backend/app/services/users.py:75-83`
 - `backend/tests/test_users_profiles.py:89-101` (`test_users_without_membership_can_only_discover_themselves`)
 - `frontend/src/components/chat/NewConversationDialog.tsx:50-65`
-- `frontend/scripts/matrix-step08-browser-test.mjs:40-84, 198-205` (untracked)
+- `frontend/scripts/matrix-step08-browser-test.mjs:40-84, 198-205` (committed test harness; not run here)
 
 **Possible follow-up question:** Is Alice/Bob discovery failing because Matrix has not synced?
 
 **Answer:** The first deterministic blocker is application directory scope: with no shared organization, FastAPI does not return Bob. The Step 08 script provisions shared membership before testing room creation.
 
-**Implementation status:** PARTIAL — privacy behavior is implemented and covered by a backend test; organization onboarding is absent and the Step 08 browser test was not run here.
+**Implementation status:** PARTIAL — privacy behavior is implemented and covered by a backend test source; organization onboarding is absent and neither the backend suite nor the Step 08 browser test was run here.
 
 ### Q12. Why are FastAPI and Synapse using separate PostgreSQL databases?
 
@@ -438,7 +438,7 @@ The local homeserver is named `localhost`, serves the client API on port 8008, a
 
 **Short interview answer (30–45 seconds):**
 
-The local Synapse stack runs the pinned Synapse image and a separate PostgreSQL service. Synapse listens on 8008 inside its container, with the development host mapping bound to loopback. It joins a private database network and a client network; media and PostgreSQL data use named volumes. The local homeserver config uses the `localhost` server name and JWT authentication.
+The local Synapse stack runs a version-tagged Synapse image and a separate PostgreSQL service. Synapse listens on 8008 inside its container, with the development host mapping bound to loopback. It joins a private database network and a client network; media and PostgreSQL data use named volumes. The local homeserver config uses the `localhost` server name and JWT authentication.
 
 **Technical explanation:**
 
@@ -507,17 +507,17 @@ The current room creator asks for a private room preset, sets `is_direct` for a 
 
 **Short interview answer (30–45 seconds):**
 
-A direct chat creates or reuses a private encrypted room and invites one mapped Matrix user. Step 08 now includes encrypted invite rooms in the client list and has an accept-invitation button that calls `joinRoom()`. A group helper can create an encrypted room with multiple invitees, and the E2EE integration harness covers a three-user group. The current UI does not expose a group-creation flow.
+A direct chat creates or reuses a private encrypted room and invites one mapped Matrix user. The committed Step 08 implementation includes encrypted invite rooms in the client list and an accept-invitation button that calls `joinRoom()`. A group helper can create an encrypted room with multiple invitees, and the E2EE integration harness covers a three-user group. The current UI does not expose a group-creation flow.
 
 **Technical explanation:**
 
-The current `createDirect()` checks for an existing encrypted room with exactly one other active/invited participant before making a new one. `createEncryptedRoom()` verifies Rust Crypto is present and writes the encryption state at room creation. The invitee sees the room as `invite`; the Step 08 change includes invited rooms in `conversationsFromMatrixClient()`. On acceptance, `ChatPage` invokes `client.joinRoom(roomId)`. Group creation is available through `createEncryptedGroup()` but no component calls it. The live E2EE test script constructs and tests a group separately.
+The current `createDirect()` checks for an existing encrypted room with exactly one other active/invited participant before making a new one. `createEncryptedRoom()` verifies Rust Crypto is present and writes the encryption state at room creation. The invitee sees the room as `invite`; the Step 08 implementation includes invited rooms in `conversationsFromMatrixClient()`. On acceptance, `ChatPage` invokes `client.joinRoom(roomId)`. Group creation is available through `createEncryptedGroup()` but no component calls it. The live E2EE test script constructs and tests a group separately.
 
 **Evidence in my project:**
 
-- `frontend/src/hooks/useMatrixRooms.ts:8-85` (current uncommitted direct reuse/group helper)
+- `frontend/src/hooks/useMatrixRooms.ts:8-85` (committed Step 08 direct reuse/group helper)
 - `frontend/src/services/matrix/encryption.ts:13-49`
-- `frontend/src/services/matrix/rooms.ts:91-99` (current uncommitted invite inclusion)
+- `frontend/src/services/matrix/rooms.ts:91-99` (committed Step 08 invite inclusion)
 - `frontend/src/pages/ChatPage.tsx:128-144, 378-390`
 - `frontend/scripts/matrix-e2ee-live-test.mjs:616-697`
 
@@ -525,7 +525,7 @@ The current `createDirect()` checks for an existing encrypted room with exactly 
 
 **Answer:** Not in the current source. The hook and test harness have group paths, but the current UI only starts a direct conversation.
 
-**Implementation status:** PARTIAL — direct-room invite flow is in uncommitted work; group support is API/test-level without UI.
+**Implementation status:** PARTIAL — the direct-room invite flow is implemented and committed, but was not live-verified; group support is helper/test-level without UI.
 
 ### Q21. Why did you integrate the Matrix JavaScript SDK?
 
@@ -1212,11 +1212,11 @@ The room mapper converts each SDK timeline event into a LumaChat `Message`. It u
 
 **Short interview answer (30–45 seconds):**
 
-The conversation model takes `unreadCount` from the Matrix SDK room’s unread notification count, and the sidebar shows a badge. The current Step 08 `ChatPage` also submits a read receipt for the latest incoming message when the selected room is joined, visible, and unread. This code is uncommitted and was not live-tested; an older architecture document still says read-marker submission is not implemented, so I would describe the current source path with that documentation discrepancy.
+The conversation model takes `unreadCount` from the Matrix SDK room’s unread notification count, and the sidebar shows a badge. The Step 08 `ChatPage`, committed in `d0ed3a0`, submits a read receipt for the latest incoming message when the selected room is joined, visible, and unread. I found no explicit `m.fully_read` read-marker call; the architecture document’s statement that read-marker submission is not implemented is consistent with that distinction. The receipt path is in source but not live-tested.
 
 **Technical explanation:**
 
-`conversationFromMatrixRoom()` calls `room.getUnreadNotificationCount()`. `ConversationListItem` displays a number capped visually at `99+`. `ChatPage` looks for the latest incoming, non-decryption-failed message event and calls `client.sendReadReceipt()` once per user/room/event key; it suppresses the call when the page is hidden, the room is only invited, or the notification count is zero. Room receipt events refresh the conversation snapshot. This is Matrix room notification state, not a LumaChat unread-count table.
+`conversationFromMatrixRoom()` calls `room.getUnreadNotificationCount()`. `ConversationListItem` displays a number capped visually at `99+`. `ChatPage` looks for the latest incoming, non-decryption-failed message event and calls `client.sendReadReceipt()` once per user/room/event key; it suppresses the call when the page is hidden, the room is only invited, or the notification count is zero. This updates a Matrix read receipt, not the separate fully-read marker (`m.fully_read`). The code has no explicit `read_markers`/`m.fully_read` call. Room receipt events refresh the conversation snapshot. This is Matrix room notification state, not a LumaChat unread-count table.
 
 **Evidence in my project:**
 
@@ -1225,7 +1225,9 @@ The conversation model takes `unreadCount` from the Matrix SDK room’s unread n
 - `frontend/src/pages/ChatPage.tsx:105-128`
 - `frontend/src/services/matrix/session.ts:848-882`
 - `frontend/src/services/matrix/rooms.test.ts:20-49`
-- `docs/architecture.md:6-12` (stale relative to the current uncommitted read-receipt path)
+- `docs/architecture.md:6-12` (says read-marker submission is not implemented; consistent with the absence of an explicit fully-read-marker call)
+- [Matrix read receipts and fully-read markers](https://spec.matrix.org/latest/client-server-api/)
+- [matrix-js-sdk `sendReadReceipt()` and `setRoomReadMarkers()` API](https://matrix-org.github.io/matrix-js-sdk/classes/matrix.MatrixClient.html)
 
 **Possible follow-up question:** Is the `99+` badge based on a LumaChat SQL query?
 
@@ -1255,7 +1257,7 @@ The new-conversation dialog calls FastAPI’s `/users/search` after the user ent
 
 **Answer:** FastAPI may not return Bob if the users do not share an organization; directory authorization happens before the frontend gets a Matrix ID.
 
-**Implementation status:** PARTIAL — current Step 08 source implements the direct flow, but the changes are uncommitted and the browser scenario was not run.
+**Implementation status:** IMPLEMENTED BUT NOT LIVE-VERIFIED — the committed source implements the contact-to-direct-room flow, but the browser scenario was not run. It depends on the directory returning an authorized contact, such as a user in the same organization.
 
 ### Q50. What happens if a user loses internet connectivity?
 
@@ -1535,3 +1537,190 @@ The identity bridge must keep three credentials distinct: the FastAPI access JWT
 **Answer:** Crypto, cross-signing, and room-state guards throw before the SDK send call; unit tests assert that the send function is not called for plaintext or unready crypto cases.
 
 **Implementation status:** PARTIAL — this is a code-grounded challenge narrative; unit checks pass, while live Synapse/browser behavior was not verified in this review.
+
+## Part 8 — File-by-file guide
+
+The “caller and communication” column names the main code path, not every import. For model and configuration files, the “operation” is an example of how another layer uses that definition. All references below are to the current checkout; Step 08 is committed in `d0ed3a0`, while the working-tree changes for this task are documentation only.
+
+### Backend and database
+
+| File | Responsibility and important symbols | Main caller and communication | Simple operation and source references |
+|---|---|---|---|
+| `backend/app/main.py` | `create_app()` builds FastAPI, CORS, exception handlers, API routes, and health route. | ASGI server imports the application; routes dispatch to `api/v1/router.py`; health checks use DB/Synapse helpers. | Example: `create_app()` mounts routes under `/api/v1`. `main.py:15-38`. |
+| `backend/app/api/v1/router.py` | Builds the versioned `api_router` and includes access, auth, health, profile, subscription, and user routers. | Included by `create_app()`; each route calls a service or dependency. | Example: `/users/search` is reachable because `users.router` is included. `router.py:1-12`. |
+| `backend/app/api/v1/auth.py` | HTTP handlers `register`, `login`, `refresh`, `logout`, and `auth_me`. | React `AuthContext`/`ApiClient` calls it; uses `services/auth.py`, `core/security.py`, DB dependencies, and `MatrixClient`. | Example: `/auth/login` verifies the app password, gets a Matrix session, and returns both sessions. `auth.py:50-182`. |
+| `backend/app/api/v1/users.py` | `/users/me`, profile-adjacent user patching, `/users/search`, list, and read handlers; `DirectoryUser` applies `directory.search`. | `NewConversationDialog` calls `/users/search`; handlers call `services/users.py` and SQLAlchemy. | Example: a two-character search becomes a paginated, authorized directory response. `users.py:17-78`. |
+| `backend/app/api/v1/profiles.py` | `read_profile()` and `patch_profile()` expose profile routes. | React profile/API callers use FastAPI bearer auth; `get_visible_user()` applies user visibility before service access. | Example: an out-of-scope profile lookup is returned as not found. `profiles.py:17-36`. |
+| `backend/app/api/v1/subscriptions.py` | Plan listing, current user subscription, and admin grant route. | Subscription UI/API callers use FastAPI; handlers delegate to `services/subscriptions.py`. | Example: an admin grant becomes a new subscription row. `subscriptions.py:21-54`. |
+| `backend/app/api/v1/access.py` | `/access/check` returns an `AccessDecision` for a feature name. | Authenticated API caller invokes it; it calls `evaluate_feature_access()` with the DB session. | Example: `feature=directory.search` resolves the user’s effective plan and entitlement. `access.py:17-23`. |
+| `backend/app/api/dependencies.py` | `get_current_user()`, `CurrentUser`, and `get_matrix_client()` provide auth/DB/Matrix dependencies. | FastAPI route dependencies call JWT validation and load `User` from PostgreSQL. | Example: a missing, invalid, or inactive app identity is rejected before directory code runs. `dependencies.py:21-67`. |
+| `backend/app/core/security.py` | Argon2 password helpers, app JWT encode/decode, Matrix localpart, short-lived Synapse login JWT, refresh-token creation/hash. | `services/auth.py` and auth routes call these; bridge JWT goes to Synapse. | Example: app UUID maps to stable localpart `u_<uuidhex>`. `security.py:19-107`. |
+| `backend/app/core/permissions.py` | `require_feature()` returns a FastAPI dependency that evaluates an entitlement. | `users.py` declares `DirectoryUser`; dependency checks subscription service before route execution. | Example: a plan without `directory.search` gets 403. `permissions.py:15-28`. |
+| `backend/app/core/database.py` | SQLAlchemy `engine`, `SessionLocal`, `get_db()`, and database health probe. | Route/service dependencies obtain a request-scoped session. | Example: `get_db()` yields a session and closes it after the request. `database.py:8-26`. |
+| `backend/app/core/config.py` | Pydantic `Settings` reads database, JWT, Synapse, plan, and runtime settings and validates them. | `core/security.py`, `database.py`, and `MatrixClient` read settings; Compose passes environment variables. | Example: app and test DB names must differ and CORS origins cannot use `*`. `config.py:11-136`. |
+| `backend/app/models/base.py` | SQLAlchemy declarative `Base` metadata root. | Model files subclass it; Alembic imports it as `target_metadata`. | Example: Alembic discovers `User`/`Subscription` table metadata. `base.py:1-5`, `alembic/env.py:10-20`. |
+| `backend/app/models/organization.py` | `Organization` maps to `organizations`: UUID ID, name, unique slug, creation time, and `users` relationship. | `User.organization` uses `back_populates`; services filter through `User.organization_id`. | Example: one organization owns a collection of user rows. `organization.py:13-27`. |
+| `backend/app/models/user.py` | `User` maps to `users`: UUID ID, unique case-insensitive email/username indexes, password hash, flags, role, nullable `organization_id`, timestamps, profile/subscriptions/refresh-token relationships. | Auth and user services/repositories load or update it; the user FK points to `organizations`. | Example: an unassigned account has `organization_id = NULL`. `user.py:21-83`. |
+| `backend/app/models/profile.py` | `Profile` maps to `profiles` with `user_id` as PK/FK and display name, picture, bio, job title, department, free-text `organization`, and update time. | `User.profile` and profile service; the free-text field does not establish tenant membership. | Example: the profile is deleted with its user; organization scope still comes from `users.organization_id`. `profile.py:12-39`. |
+| `backend/app/models/subscription.py` | `Subscription` maps to `subscriptions`: per-user plan/status, start/expiry, creator, timestamps, constraints and lookup index. | Auth registration creates the initial free row; repository/service evaluate the latest row. | Example: `user_id` ties a subscription to one app user; there is no `Subscriber` model. `subscription.py:20-68`. |
+| `backend/app/models/refresh_token.py` | `RefreshToken` stores a hash, user, token family, expiry, revocation, and replacement ID. | Auth service rotates/revokes tokens; refresh repository locks a row while checking it. | Example: replay of a revoked token revokes the rest of its family. `refresh_token.py:12-44`. |
+| `backend/app/repositories/users.py` | `get_by_id()`, `get_by_login()`, and `get_by_email_or_username()` are focused user queries. | Called by auth and user services; queries SQLAlchemy models and eagerly loads profile for login. | Example: login may match a normalized email or username. `users.py:11-43`. |
+| `backend/app/repositories/profiles.py` | `get_for_user()` loads the profile by its shared user/profile primary key. | Called by `services/profiles.py`. | Example: `db.get(Profile, user_id)` returns one profile or `None`. `profiles.py:8-9`. |
+| `backend/app/repositories/subscriptions.py` | `get_latest_for_user()` selects a user’s newest subscription by creation time and ID. | Called by `services/subscriptions.py`. | Example: an entitlement check uses the latest row rather than joining to an organization plan. `subscriptions.py:9-16`. |
+| `backend/app/repositories/refresh_tokens.py` | `get_for_update()` finds a hashed token with `SELECT ... FOR UPDATE`. | Called by refresh rotation/revoke service functions. | Example: serialize concurrent refresh attempts for the same token row. `refresh_tokens.py:7-13`. |
+| `backend/app/services/auth.py` | `register_user()`, `authenticate_user()`, `issue_session()`, `rotate_refresh_token()`, and revocation helpers implement auth rules. | Called by auth API routes; touches users, profiles, subscriptions, refresh tokens, and security helpers. | Example: registration commits user, profile, and free subscription together. `auth.py:38-158`. |
+| `backend/app/services/users.py` | `can_view_user()`, `get_visible_user()`, `update_user()`, and `search_users()` enforce directory/profile visibility and filter queries. | Called by user/profile routes; reads active users and profiles from PostgreSQL. | Example: a non-admin with no organization searches only their own user row. `users.py:15-108`. |
+| `backend/app/services/profiles.py` | `get_profile()` and `update_profile()` load/update a profile and commit changes. | Called by profile API routes; uses `repositories/profiles.py`. | Example: a patch validates fields in its schema, updates the row, commits, refreshes. `profiles.py:12-30`. |
+| `backend/app/services/subscriptions.py` | `_effective_plan()`, `evaluate_feature_access()`, plan listing, current-subscription, and admin grant logic. | Called by subscription/access routes and `require_feature()`. | Example: an expired or non-active row falls back to the free plan. `subscriptions.py:30-154`. |
+| `backend/app/integrations/matrix/client.py` | `MatrixClient` calls Synapse versions, JWT login, logout, and health APIs; validates response identity/device fields. | `auth.py` uses it for login/logout; health route uses its health method; configured internal URL is `http://synapse:8008`. | Example: POST `/_matrix/client/v3/login` with `org.matrix.login.jwt`; returns a Matrix token/device to FastAPI. `client.py:24-115`. |
+| `backend/alembic/env.py` | Configures Alembic with app DB URL and imported model metadata. | Alembic CLI uses it for offline/online migration execution. | Example: `alembic upgrade head` executes the app schema migration. `env.py:10-55`. |
+| `backend/alembic/versions/0001_initial_schema.py` | Initial migration creates organizations, users, profiles, subscriptions, and refresh tokens plus constraints/indexes. | Alembic applies/reverts it; model schema is the source for later revisions. | Example: migration creates nullable `users.organization_id` FK to organizations. `0001_initial_schema.py:1-195`. |
+
+### Frontend and Matrix client
+
+| File | Responsibility and important symbols | Main caller and communication | Simple operation and source references |
+|---|---|---|---|
+| `frontend/src/App.tsx` | `App`, route guards, and provider/router composition. | Browser entry point; mounts Auth and Matrix contexts around login/register/chat routes. | Example: an authenticated user is routed to `/chat`. `App.tsx:23-43`. |
+| `frontend/src/context/AuthContext.tsx` | Holds user, app mode, API client, Matrix login session; exposes `signIn`, `register`, `signOut`, and demo mode. | `App`, protected pages, and `ChatPage` consume `useAuth()`; calls FastAPI through `ApiClient`. | Example: login stores the app JWT in memory and the Matrix session in context. `AuthContext.tsx:65-164`. |
+| `frontend/src/context/MatrixContext.tsx` | Acquires a `MatrixClientRegistry` lease, subscribes to the session snapshot, and exports client/session/manager/status via `useMatrixContext()`. | Provider wraps routes; Matrix SDK session manager supplies live updates. | Example: successful login starts a managed SDK session and releasing the page releases its lease. `MatrixContext.tsx:30-157`. |
+| `frontend/src/services/api/client.ts` | `ApiClient.request()` attaches app bearer token, includes cookies, refreshes after an eligible 401, and parses errors. | AuthContext and directory UI call it; it communicates with FastAPI, not Synapse. | Example: `/users/search` gets an `Authorization: Bearer` header. `client.ts:26-136`. |
+| `frontend/src/services/matrix/client.ts` | Validates homeserver URL/session, creates SDK client, and confirms `whoami` user/device matches expected identity. | `MatrixClientSession` uses it before crypto init; SDK then talks to Synapse. | Example: mismatch between app-derived Matrix ID and `whoami` fails initialization. `client.ts:8-158`. |
+| `frontend/src/services/matrix/session.ts` | `MatrixClientSession`, snapshot/event lifecycle, Rust Crypto setup, sync/reconnect, recovery, device listing/verification, and `MatrixClientRegistry`. | `MatrixContext` acquires it; SDK events and crypto API feed React snapshots. | Example: an incoming timeline event schedules a room snapshot refresh; `startClient()` begins after crypto. `session.ts:141-1150`. |
+| `frontend/src/services/matrix/crypto-store.ts` | Computes an isolated IndexedDB prefix and Web Lock name from homeserver/user/device; `acquireMatrixCryptoStoreLock()` holds one client lock. | Session manager calls it before client initialization. | Example: two tabs cannot concurrently open the same device crypto store. `crypto-store.ts:15-104`. |
+| `frontend/src/services/matrix/secret-storage.ts` | `SecretStorageKeyController` caches secret-storage key bytes in memory, temporarily provides a recovery key, and zeroes copied buffers. | Session manager supplies its callbacks to Rust Crypto. | Example: a recovery key is made available only during restore and cleared afterward. `secret-storage.ts:8-76`. |
+| `frontend/src/services/matrix/identity.ts` | `matrixUserIdForAppUserId()` and `mappedMatrixUserId()` create stable Matrix IDs from app UUIDs. | New-conversation UI calls it before inviting a directory user. | Example: an app UUID becomes `@u_<hex>:<server-name>`. `identity.ts:4-11`. |
+| `frontend/src/services/matrix/encryption.ts` | `createEncryptedRoom()` sets and confirms encryption state; `sendEncryptedTextMessage()` guards and sends encrypted text. | `useMatrixRooms` and `ChatPage` call it; Matrix SDK talks to Synapse. | Example: no crypto or unconfirmed room means no room/send API call. `encryption.ts:5-123`. |
+| `frontend/src/services/matrix/rooms.ts` | Converts Matrix room/timeline members into `Conversation`; deduplicates by event ID, sorts, and maps unread count/state. | Session manager calls `conversationsFromMatrixClient()` to publish room data to React. | Example: a room with an invite membership is included in the sidebar. `rooms.ts:12-99`. |
+| `frontend/src/services/matrix/events.ts` | `messageFromMatrixEvent()` maps encrypted/decrypted Matrix events into UI messages. | `rooms.ts` uses it for each SDK timeline event. | Example: missing room key produces a placeholder instead of displaying ciphertext. `events.ts:19-109`. |
+| `frontend/src/services/matrix/media.ts` | `fetchMatrixMedia()` validates an `mxc://` URI and fetches it with a Matrix bearer token. | `AttachmentCard` uses it for an existing media URI; live encrypted upload is not implemented. | Example: it downloads a Matrix media blob; this does not make that file E2EE. `media.ts:3-34`. |
+| `frontend/src/hooks/useMatrixRooms.ts` | `useMatrixRooms()` returns rooms/status and direct/group room creation callbacks. | `ChatPage` calls it; delegates to MatrixContext and encryption room helper. | Example: it reuses a matching encrypted DM or creates/invites into one. `useMatrixRooms.ts:8-85` (Step 08 committed in `d0ed3a0`). |
+| `frontend/src/hooks/useMatrixClient.ts` | Thin selection of client/session/status values from MatrixContext. | No in-repository caller was found; it can provide these values without owning the session lifecycle. | Example: return `client` and `session` from the context. `useMatrixClient.ts:3-21`. |
+| `frontend/src/hooks/useMatrixSync.ts` | Thin selection of status, initial sync, error, and recent events. | No in-repository caller was found; the current page reads the rooms/context hook instead. | Example: return the shared reconnect state. `useMatrixSync.ts:3-19`. |
+| `frontend/src/pages/ChatPage.tsx` | Coordinates chat selection, invite acceptance, receipt submission, encrypted send, sidebar/dialogs, and composer state. | Auth and Matrix contexts/hooks; calls Matrix SDK/helper and chat components. | Example: composer text is rejected for plaintext room or sent via `sendEncryptedTextMessage()`. `ChatPage.tsx:30-70,105-176,220-251,423-524` (Step 08 committed in `d0ed3a0`). |
+| `frontend/src/components/MatrixSecurityDialog.tsx` | Displays crypto/recovery/verification state; invokes device verification, SAS, and backup methods on manager. | Opened from `ChatPage`; invokes `MatrixClientSession` methods. | Example: user enters recovery key and requests history restore. `MatrixSecurityDialog.tsx:45-225,226-452` (Step 08 recovery-state handling committed in `d0ed3a0`). |
+| `frontend/src/components/MatrixConnectionStatus.tsx` | Maps sync status to readable connection labels. | Used by chat/sidebar UI; receives status from MatrixContext. | Example: `reconnecting` becomes “Reconnecting to Matrix…”. `MatrixConnectionStatus.tsx:1-50`. |
+| `frontend/src/components/ProtectedRoute.tsx` | Prevents unauthenticated navigation into chat routes. | Used by `App.tsx`; reads AuthContext. | Example: route redirects to login when no app user is authenticated. `ProtectedRoute.tsx:4-12`. |
+| `frontend/src/components/chat/NewConversationDialog.tsx` | Debounced directory search, filters current user, and starts a selected direct conversation. | Opened by `ChatPage`; calls FastAPI `ApiClient`, identity mapper, and callback. | Example: search after two characters, then ask parent to create the room. `NewConversationDialog.tsx:29-111`. |
+| `frontend/src/components/chat/ConversationSidebar.tsx` | Renders conversation navigation, user/actions, and connection status. | `ChatPage` passes conversations and callbacks; renders each `ConversationListItem`. | Example: selecting a row navigates to its room. `ConversationSidebar.tsx:1-199`. |
+| `frontend/src/components/chat/ConversationListItem.tsx` | Shows room name, last activity, preview, typing state, and unread badge. | `ConversationSidebar` supplies a `Conversation` from the Matrix room mapper. | Example: unread count above 99 is displayed as `99+`. `ConversationListItem.tsx:13-75`. |
+| `frontend/src/components/chat/ChatHeader.tsx` | Renders selected conversation header and controls for search/info/navigation. | `ChatPage` passes conversation and callbacks. | Example: open contact info without changing Matrix membership. `ChatHeader.tsx:26-156`. |
+| `frontend/src/components/chat/ContactInfoPanel.tsx` | Local conversation information and UI toggles/search/media sections. | `ChatPage` passes conversation state and event callbacks. | Example: toggling wallpaper is a browser UI preference, not a Synapse room setting. `ContactInfoPanel.tsx:37-196`. |
+| `frontend/src/components/chat/MessageComposer.tsx` | Handles text/emoji/file selection, keyboard submit, busy/disabled behavior, and errors. | `ChatPage` supplies `onSend`; live mode disables attachments. | Example: Enter submits, Shift+Enter keeps a newline; disabled sends surface an error. `MessageComposer.tsx:27-192`. |
+| `frontend/src/components/chat/MessageList.tsx` | Filters/searches and groups messages by date, scrolls to latest, renders bubbles. | `ChatPage` passes the selected conversation; it does not call Matrix directly. | Example: new messages cause the log region to scroll when search is closed. `MessageList.tsx:15-136`. |
+| `frontend/src/components/chat/MessageBubble.tsx` | Renders one message’s body, sender, timestamp, attachment, and delivery icon. | `MessageList` supplies `Message`; optionally `AttachmentCard` reads Matrix media. | Example: event ID/room/type/sender are exposed as data attributes for test assertions. `MessageBubble.tsx:12-83`. |
+| `frontend/src/components/chat/AttachmentCard.tsx` | Displays/downloads a media attachment. | `MessageBubble` or `ContactInfoPanel` provides a Matrix token; calls `fetchMatrixMedia()`. | Example: download an `mxc://` resource; uploads and encrypted media are not implemented. `AttachmentCard.tsx:12-99`. |
+
+### Infrastructure and verification assets
+
+| File | Responsibility and important settings | Called by / communicates with | Example and evidence |
+|---|---|---|---|
+| `compose.backend.yaml` | Defines app PostgreSQL and FastAPI, app DB volume/private network, external shared Synapse client network, health check, and loopback API port. | Docker Compose; backend connects to app DB and Synapse over the shared client network. | `docker compose -f compose.backend.yaml up -d backend`; inspect `compose.backend.yaml:1-113`. |
+| `compose.synapse.yaml` | Defines Synapse PostgreSQL and Synapse, DB/media/config volumes, health check, networks, and loopback homeserver port. | Docker Compose; Synapse connects to its DB; FastAPI reaches it through the client network. | `docker compose -f compose.synapse.yaml up -d`; inspect `compose.synapse.yaml:1-101`. |
+| `synapse/config/homeserver.yaml` | Local homeserver config: server name, HTTP listener, PostgreSQL, media path, registration/guest policy, and JWT provider. It is ignored by Git and includes secret-bearing values. | Synapse container mounts `./synapse/config` at `/data`; never copy its secret values into notes or screen shares. | Safe visible settings include server name and port; `homeserver.yaml:1-44`, `.gitignore:18`, Compose mount at `compose.synapse.yaml:62-70`. |
+| `.env.example` | Documents app DB/JWT/session settings and separate Synapse JWT bridge configuration using placeholders. | Compose interpolates the developer’s local `.env`; real values must remain private. | Use it to learn setting names only; `.env.example:1-94`. |
+| `frontend/.env.example` | Browser-visible FastAPI and Synapse URLs/server name; these are public endpoint settings, not credentials. | Vite exposes these `VITE_` values to browser client factories. | `VITE_API_URL` and `VITE_MATRIX_HOMESERVER_URL`; `frontend/.env.example:1-4`. |
+| `frontend/package.json` | Declares React/Vite/TypeScript scripts and pins `matrix-js-sdk` at `44.0.0`. | npm scripts run typecheck, Vitest, build, and optional live harnesses. | Example: `npm test` runs Vitest; `npm run test:e2ee-live` is a live harness command. `package.json:1-35`. |
+| `backend/tests/conftest.py` | Creates fixtures and resets the dedicated app test DB by dropping/recreating tables. | Pytest auth/user/subscription tests use it. | It was not run for this guide because it mutates `chat_app_test`; `conftest.py:60-90`. |
+| `backend/tests/test_users_profiles.py` | Tests directory scoping, search pagination/privacy, and unassigned-user self-only visibility. | Pytest uses FastAPI test client and database fixtures. | Example: tests same-org results and outside profile 404; `test_users_profiles.py:59-109`. |
+| `backend/tests/test_auth.py` | Tests registration/login/JWT validation/refresh rotation/reuse revocation. | Pytest uses fake Matrix integration and isolated app database. | Example: a reused refresh token invalidates its family; `test_auth.py:260-332`. |
+| `frontend/src/services/matrix/encryption.test.ts` | Unit tests encrypted room state, send guards, and cross-signing checks with mocked SDK client. | Vitest; currently included in the passing 6-file/33-test suite. | `encryption.test.ts:45-126`. |
+| `frontend/src/services/matrix/rooms.test.ts` | Unit tests event-ID de-duplication, sorting, room state, invites, and unread count mapping. | Vitest; exercises pure room mapping with Matrix event/room doubles. | `rooms.test.ts:7-92`. |
+| `frontend/scripts/matrix-e2ee-live-test.mjs` | Live Node SDK test harness for login, SAS, encrypted message, group, backup/recovery, and membership boundaries. | Needs a configured local FastAPI/Synapse deployment and test registration; it creates synthetic users when run. | Source assertions include ciphertext/no-plaintext checks; not run for this guide. `matrix-e2ee-live-test.mjs:307-332,517-714`. |
+| `frontend/scripts/matrix-e2ee-browser-test.mjs` | Playwright/Chromium live browser harness for React crypto, two-user message, and offline catch-up. | Needs local API, Synapse, Vite, registration-enabled test setup, and Chromium. | Its reconnect scenario expects decrypt without refresh; not run here. `matrix-e2ee-browser-test.mjs:530-592`. |
+| `frontend/scripts/matrix-step08-browser-test.mjs` | Tracked Step 08 two-browser direct-message scenario, with development-only isolated organization provisioning. | Requires a live test environment and opts into test-account provisioning when run. | Alice/Bob scenario is harness source only; not run here. `matrix-step08-browser-test.mjs:1-84,180-205,610-634`. |
+| `docs/architecture.md` | Describes application/Synapse service boundaries and includes the architecture diagram. It says read-marker submission is not implemented; current Step 08 source sends read receipts but has no explicit fully-read-marker call. | Interview reference; distinguish the current read-receipt path from Matrix’s fully-read marker. | `docs/architecture.md:1-48,128-145`; `ChatPage.tsx:105-128`. |
+| `docs/end-to-end-encryption.md` | Documents Rust Crypto lifecycle, trust/recovery, event flow, and existing live test commands/assertions. | Human-readable companion to the E2EE implementation and test harnesses. | It distinguishes server ciphertext from recipient decryption; `docs/end-to-end-encryption.md:1-244`. |
+
+No `Subscriber` model/table or many-to-many organization-membership table exists. The actual equivalents are per-user `Subscription` rows and the nullable `users.organization_id` foreign key. The listed `backend/app/integrations/matrix/client.py` exists and is the Synapse HTTP integration; there is no custom FastAPI chat/WebSocket service.
+
+## Part 9 — Practical senior developer demonstrations
+
+These are walkthroughs for a later interview or isolated development environment. No live demonstration, account creation, database query, or service startup was performed while preparing this guide. Use synthetic data only; do not screen-share tokens, recovery keys, passwords, or the local Synapse config.
+
+### Demo 1 — Database relationships
+
+**Files:** `backend/app/models/organization.py`, `user.py`, `profile.py`, `subscription.py`; `backend/alembic/versions/0001_initial_schema.py`; `backend/app/services/subscriptions.py`.
+
+**Walkthrough:** Start with the SQLAlchemy models. Show that `organizations.id` is referenced by nullable `users.organization_id`, `profiles.user_id` is both its primary key and a user FK, and each `subscriptions` row has a `user_id` FK. Explain there is no separate `Subscriber` table or membership table. If a read-only query is useful, run it only in a safe non-production environment inside a read-only transaction:
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+SELECT o.slug, count(u.id) AS user_count
+FROM organizations AS o
+LEFT JOIN users AS u ON u.organization_id = o.id
+GROUP BY o.id, o.slug
+ORDER BY o.slug;
+
+SELECT user_id, plan_id, status, starts_at, expires_at
+FROM subscriptions
+WHERE user_id = '<TEST_USER_UUID>'::uuid
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+ROLLBACK;
+```
+
+Replace the placeholder only with a synthetic test UUID. The second query displays the latest row using the same ordering as `get_latest_for_user()`; it does not mutate data.
+
+**Expected result:** The first query shows organization counts based on the real FK, not the free-text `Profile.organization`. The second shows the per-user subscription record. Access is then calculated by `evaluate_feature_access()`, not by a `Subscriber` table.
+
+**Evidence available:** `Organization.users`, `User.organization`, `User.profile`, `User.subscriptions`, subscription constraints/index, and the migration. The backend test fixture that rebuilds `chat_app_test` was deliberately not run for this guide.
+
+### Demo 2 — Authentication
+
+**Files:** `frontend/src/context/AuthContext.tsx`, `frontend/src/services/api/client.ts`, `backend/app/api/v1/auth.py`, `backend/app/services/auth.py`, `backend/app/core/security.py`, `backend/app/integrations/matrix/client.py`, `frontend/src/services/matrix/client.ts`.
+
+**Walkthrough:** Trace registration from React’s `/auth/register` call to the FastAPI route and `register_user()`. Show Argon2id hashing and the transaction creating a user, profile, and initial free subscription. Then trace login: the app password is verified; FastAPI signs a short-lived Synapse login assertion; `MatrixClient` posts it to Synapse; FastAPI returns an app JWT and a separate Matrix session. In the browser, show the Matrix client validating `whoami` against the expected Matrix user/device before crypto initialization.
+
+**Expected result:** A successful login has one app identity, an app API token, and a Synapse-issued Matrix token/device ID. The short-lived bridge JWT is exchanged server-side and is not the Matrix token used by the browser.
+
+**Available evidence:** Existing backend auth tests cover registration/login/token checks/refresh rotation, but were not run here because their fixture drops and recreates `chat_app_test`. Do not use a real account or expose any token in the demonstration.
+
+### Demo 3 — Encrypted Alice-to-Bob messaging
+
+**Files:** `frontend/src/components/chat/NewConversationDialog.tsx`, `frontend/src/services/matrix/identity.ts`, `frontend/src/hooks/useMatrixRooms.ts`, `frontend/src/services/matrix/encryption.ts`, `frontend/src/pages/ChatPage.tsx`, `frontend/src/services/matrix/session.ts`, `frontend/scripts/matrix-e2ee-live-test.mjs`.
+
+**Walkthrough:** In a disposable environment, sign in as Alice and Bob in separate client sessions. Ensure they are visible in the app directory (same test organization), create/select their encrypted DM, and wait for Bob to accept the invite. Alice sends a unique synthetic phrase. Show the Synapse event type as `m.room.encrypted` and verify the raw event does not contain the phrase. Show Bob’s client receiving the decrypted body through sync.
+
+**Optional isolated harness:** `docs/end-to-end-encryption.md` documents `npm run test:e2ee-live` and the required `LUMACHAT_TEST_API_URL`, `LUMACHAT_MATRIX_HOMESERVER_URL`, and `LUMACHAT_MATRIX_SERVER_NAME`. The script creates synthetic accounts, so run it only against a disposable test setup with registration enabled.
+
+**Expected result:** The sender and recipient SDKs can read the test body; the homeserver event contains ciphertext and not the plaintext. No such live result was generated for this guide.
+
+**Available evidence:** Unit tests passed for the frontend guard path; live harness assertions exist at `matrix-e2ee-live-test.mjs:307-332,517-590`.
+
+### Demo 4 — Offline synchronization
+
+**Files:** `frontend/src/services/matrix/session.ts`, `frontend/src/context/MatrixContext.tsx`, `frontend/src/services/matrix/events.ts`, `frontend/src/components/MatrixConnectionStatus.tsx`, `frontend/scripts/matrix-e2ee-browser-test.mjs`.
+
+**Walkthrough:** In an isolated browser test, connect Alice and Bob, confirm an encrypted room, take Alice’s browser offline, send a unique encrypted event from Bob, then restore Alice’s connectivity. Observe the reconnecting status, Matrix catch-up, event decryption, and React bubble without reloading the page.
+
+**Expected result:** The room event is delivered after reconnect and decrypted if Alice’s device has the room key. The script checks the event row count and connected status. An event can sync but remain unreadable if the required room key is unavailable.
+
+**Available evidence:** The browser test contains this exact offline trigger/reconnect sequence at `matrix-e2ee-browser-test.mjs:530-570`; it was not run here. Unit tests do not substitute for the browser check.
+
+### Demo 5 — Device verification and history recovery
+
+**Files:** `frontend/src/components/MatrixSecurityDialog.tsx`, `frontend/src/services/matrix/session.ts`, `frontend/src/services/matrix/secret-storage.ts`, `frontend/src/services/matrix/crypto-store.ts`, `frontend/scripts/matrix-e2ee-live-test.mjs`.
+
+**Walkthrough:** With two disposable devices/accounts, open **Encryption and devices**, show device ID/fingerprint/trust status, request verification, and have both sides compare and confirm SAS emoji through a trusted out-of-band channel. Then show recovery setup: generate a recovery key, save it securely, acknowledge the save, and verify that cross-signing and a trusted backup are reported. For recovery, use a fresh isolated crypto store and the exact recovery flow/harness rather than copying local IndexedDB.
+
+**Expected result:** The UI reports verified only after the SDK reports that trust state. A fresh device cannot decrypt old room content before keys are restored; with a valid recovery key and trusted backup, the test harness expects imported room keys and successful historical decryption.
+
+**Available evidence:** Session unit tests cover request/recovery errors; the live script includes SAS and backup recovery assertions at `matrix-e2ee-live-test.mjs:307-359,480-515,543-590`. Those live flows were not run here. Never expose the recovery key during a presentation.
+
+### Demo 6 — Organization access restrictions
+
+**Files:** `backend/app/services/users.py`, `backend/app/api/v1/users.py`, `backend/app/api/v1/profiles.py`, `backend/tests/test_users_profiles.py`, `frontend/src/components/chat/NewConversationDialog.tsx`, `frontend/scripts/matrix-step08-browser-test.mjs`.
+
+**Walkthrough:** Inspect `can_view_user()` and `search_users()`. In the backend test scenario, Alice and Bob in the same organization can appear in directory search; a user in a different organization is omitted and its profile lookup returns 404. Then inspect `test_users_without_membership_can_only_discover_themselves`: an unassigned user sees only themselves, and the frontend filters that self-result out. The committed Step 08 browser script contains a development-only helper that assigns its synthetic Alice/Bob accounts to one isolated organization so its contact test can proceed.
+
+**Expected result:** If Alice and Bob have no shared `organization_id`, FastAPI does not return Bob from `/users/search`; the room-creation UI never receives his Matrix ID from that search. This proves directory filtering, not complete Matrix tenant isolation: a Matrix token is a separate authority, so do not claim Synapse independently enforces the app’s organization rule.
+
+**Available evidence:** The backend test source covers same-org search, outside-profile 404, and self-only unassigned visibility (`test_users_profiles.py:59-109`). The test was not run here; the backend suite fixture is destructive to the dedicated test DB.
+
+## External protocol references
+
+These official references explain Matrix protocol behavior used by the project. The implementation claims above remain grounded in the local source and test harnesses:
+
+- [Matrix Client-Server API](https://spec.matrix.org/latest/client-server-api/) — event types, room state, `/sync`, and encryption.
+- [matrix-js-sdk `MatrixClient` API](https://matrix-org.github.io/matrix-js-sdk/classes/matrix.MatrixClient.html) — SDK behavior used by the browser client, including receipts and read markers.
+- [Synapse worker scaling documentation](https://element-hq.github.io/synapse/develop/workers.html) — prerequisites and limitations for a future worker deployment.
