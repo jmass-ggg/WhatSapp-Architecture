@@ -8,10 +8,12 @@ import {
 import { useMemo, useState } from "react";
 
 import { Brand } from "../Brand";
+import { MatrixConnectionStatus } from "../MatrixConnectionStatus";
 import { SearchInput } from "../SearchInput";
 import { UserAvatar } from "../UserAvatar";
 import { ConversationListItem } from "./ConversationListItem";
 import type { AuthMode, Conversation, MatrixSession, UserProfile } from "../../types";
+import type { MatrixConnectionStatus as ConnectionStatus } from "../../services/matrix/session";
 
 interface ConversationSidebarProps {
   conversations: Conversation[];
@@ -19,7 +21,9 @@ interface ConversationSidebarProps {
   currentUser: UserProfile;
   mode: AuthMode;
   matrixSession: MatrixSession | null;
-  matrixStatus: "disabled" | "syncing" | "ready" | "error";
+  matrixStatus: ConnectionStatus;
+  initialSyncComplete: boolean;
+  authenticationError: boolean;
   onSelect: (conversation: Conversation) => void;
   onNewChat: () => void;
   onSignOut: () => void;
@@ -33,6 +37,8 @@ export function ConversationSidebar({
   mode,
   matrixSession,
   matrixStatus,
+  initialSyncComplete,
+  authenticationError,
   onSelect,
   onNewChat,
   onSignOut,
@@ -51,14 +57,6 @@ export function ConversationSidebar({
   }, [conversations, query]);
 
   const displayName = currentUser.profile.display_name || currentUser.username;
-  const statusLabel =
-    mode === "demo"
-      ? "Demo workspace"
-      : matrixStatus === "ready"
-        ? "Connected to Matrix"
-        : matrixStatus === "error"
-          ? "Matrix connection issue"
-          : "Connecting to Matrix…";
 
   return (
     <aside className="conversation-sidebar" aria-label="Conversations">
@@ -175,7 +173,16 @@ export function ConversationSidebar({
         />
         <div className="sidebar-account-copy">
           <strong>{displayName}</strong>
-          <span>{statusLabel}</span>
+          {mode === "demo" ? (
+            <span>Demo workspace</span>
+          ) : (
+            <MatrixConnectionStatus
+              status={matrixStatus}
+              initialSyncComplete={initialSyncComplete}
+              authenticationError={authenticationError}
+              compact
+            />
+          )}
         </div>
         <button
           type="button"

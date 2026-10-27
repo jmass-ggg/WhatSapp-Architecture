@@ -46,16 +46,23 @@ synchronization, media, typing, or receipts.
 
 ## Matrix-Owned Operations
 
-The LumaChat browser Matrix client uses the Matrix Client-Server API directly
-for:
+The LumaChat browser uses the official Matrix JavaScript SDK with the
+Synapse-issued session returned by FastAPI login. It uses the Matrix
+Client-Server API directly for:
 
-- Matrix authentication/session and device management.
-- Direct/group rooms, membership, room state, and message send/history.
-- Incremental synchronization and event delivery.
-- Typing notifications and read receipts.
-- Media upload/download and Matrix content URIs.
-- Device keys, encrypted-room events, and encrypted attachments are not
-  implemented by this frontend.
+- Room membership, room state, timeline sync, and event delivery.
+- Direct-room creation from the existing user-directory flow.
+- Incoming typing and receipt-related state, plus media downloads for received
+  avatars and attachments.
+
+The live timeline is read-only in this integration stage. The live composer,
+message/file sending, media uploads, and read-marker submission are not
+connected; the existing message composer remains available in demo mode.
+
+FastAPI owns the app-password authentication and exchanges a short-lived
+server-signed JWT for the Synapse session. The browser does not submit a Matrix
+password or create an independent Matrix login. Device verification, E2EE,
+and encrypted attachments are not implemented by this frontend.
 
 Synapse is the source of truth for these operations. The Matrix specification
 defines its own client authentication and access tokens; these are not

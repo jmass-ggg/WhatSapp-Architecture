@@ -14,6 +14,7 @@ import type {
   MatrixSession,
   UserProfile,
 } from "../types";
+import { stopManagedMatrixSession } from "../services/matrix/session";
 
 interface LoginInput {
   login: string;
@@ -69,10 +70,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mode, setMode] = useState<AuthMode | null>(null);
   const [matrixSession, setMatrixSession] = useState<MatrixSession | null>(null);
+  const matrixSessionRef = useRef<MatrixSession | null>(null);
+  matrixSessionRef.current = matrixSession;
 
   api.setCallbacks({
     onTokenChange: () => undefined,
     onSessionExpired: () => {
+      stopManagedMatrixSession(matrixSessionRef.current);
+      matrixSessionRef.current = null;
       setUser(null);
       setMode(null);
       setMatrixSession(null);
@@ -81,6 +86,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const signIn = useCallback(
     async ({ login, password }: LoginInput) => {
+      stopManagedMatrixSession(matrixSessionRef.current);
+      matrixSessionRef.current = null;
       api.setAccessToken(null);
       const session = await api.request<LoginResponse>("/auth/login", {
         method: "POST",
@@ -89,6 +96,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       api.setAccessToken(session.access_token);
       const profile = await api.request<UserProfile>("/users/me");
       setUser(profile);
+      matrixSessionRef.current = session.matrix;
       setMatrixSession(session.matrix);
       setMode("live");
     },
@@ -107,6 +115,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const signOut = useCallback(async () => {
     const currentMode = mode;
     const currentMatrixSession = matrixSession;
+    stopManagedMatrixSession(currentMatrixSession);
     try {
       if (currentMode === "live") {
         await api.request<void>("/auth/logout", {
@@ -118,6 +127,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
     } finally {
       api.setAccessToken(null);
+      matrixSessionRef.current = null;
       setUser(null);
       setMatrixSession(null);
       setMode(null);
@@ -125,6 +135,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, [api, matrixSession, mode]);
 
   const enterDemo = useCallback(() => {
+    stopManagedMatrixSession(matrixSessionRef.current);
+    matrixSessionRef.current = null;
     api.setAccessToken(null);
     setMatrixSession(null);
     setUser(demoUser);

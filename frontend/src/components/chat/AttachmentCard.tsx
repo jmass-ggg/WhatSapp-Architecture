@@ -1,7 +1,7 @@
 import { Download, FileText, Image as ImageIcon, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { fetchMatrixMedia } from "../../services/matrix/client";
+import { fetchMatrixMedia } from "../../services/matrix/media";
 import type { Attachment } from "../../types";
 
 interface AttachmentCardProps {

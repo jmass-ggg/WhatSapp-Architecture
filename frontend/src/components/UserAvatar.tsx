@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { fetchMatrixMedia } from "../services/matrix/client";
+import { fetchMatrixMedia } from "../services/matrix/media";
 
 interface UserAvatarProps {
   name: string;

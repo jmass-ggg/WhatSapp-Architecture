@@ -179,9 +179,10 @@ They do not mutate the Synapse database.
 
 - OIDC, password recovery, email verification, MFA, and broader account
   lifecycle workflows are not implemented.
-- The browser supports Matrix sync, direct-room creation, text/file messages,
-  media transfer, and read receipts. Typing transmission, history pagination,
-  moderation, notification delivery, and E2EE are not implemented.
+- The browser supports read-only Matrix sync, direct-room creation, incoming
+  event rendering, and received-media display. Live text/file sending, media
+  uploads, read-marker submission, moderation, notification delivery, and
+  E2EE are not implemented.
 - The rate limiter is process-local and is not suitable for a multi-worker
   deployment.
 - Registration is unverified email-based prototype behavior; verification,

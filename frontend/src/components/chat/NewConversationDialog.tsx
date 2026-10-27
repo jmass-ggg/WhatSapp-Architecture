@@ -10,7 +10,7 @@ import type {
   DirectoryUser,
 } from "../../types";
 import { ApiError } from "../../services/api/client";
-import { mappedMatrixUserId } from "../../services/matrix/client";
+import { mappedMatrixUserId } from "../../services/matrix/identity";
 
 interface NewConversationDialogProps {
   open: boolean;

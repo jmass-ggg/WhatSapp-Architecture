@@ -17,6 +17,7 @@ interface MessageComposerProps {
   disabled?: boolean;
   busy?: boolean;
   placeholder?: string;
+  hint?: string;
   onSend: (text: string, file?: File) => Promise<void>;
 }
 
@@ -26,6 +27,7 @@ export function MessageComposer({
   disabled = false,
   busy = false,
   placeholder = "Write a message…",
+  hint = "Enter to send · Shift + Enter for a new line",
   onSend,
 }: MessageComposerProps) {
   const [value, setValue] = useState("");
@@ -121,6 +123,7 @@ export function MessageComposer({
                     key={emoji}
                     type="button"
                     aria-label={`Insert ${emoji}`}
+                    disabled={disabled || isBusy}
                     onClick={() => appendEmoji(emoji)}
                   >
                     {emoji}
@@ -144,6 +147,7 @@ export function MessageComposer({
             type="file"
             onChange={handleFile}
             aria-label="Choose a file to attach"
+            disabled={disabled || isBusy}
           />
         </div>
 
@@ -171,7 +175,7 @@ export function MessageComposer({
           <SendHorizontal size={19} />
         </button>
       </form>
-      <span className="composer-hint">Enter to send · Shift + Enter for a new line</span>
+      <span className="composer-hint">{hint}</span>
     </div>
   );
 }

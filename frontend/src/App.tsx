@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { MatrixProvider } from "./context/MatrixContext";
 import { ChatPage } from "./pages/ChatPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -24,18 +25,20 @@ function NotFound() {
 export function App() {
   return (
     <AuthProvider>
-      <Routes>
-        <Route element={<PublicOnly />}>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-        </Route>
-        <Route element={<ProtectedRoute />}>
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/chat/:conversationId" element={<ChatPage />} />
-        </Route>
-        <Route path="/" element={<RootRedirect />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <MatrixProvider>
+        <Routes>
+          <Route element={<PublicOnly />}>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+          </Route>
+          <Route element={<ProtectedRoute />}>
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/chat/:conversationId" element={<ChatPage />} />
+          </Route>
+          <Route path="/" element={<RootRedirect />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </MatrixProvider>
     </AuthProvider>
   );
 }

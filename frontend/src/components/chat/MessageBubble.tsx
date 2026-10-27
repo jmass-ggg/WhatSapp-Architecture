@@ -35,7 +35,13 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const outgoing = message.sender === "me";
   return (
-    <article className={`message-row${outgoing ? " is-outgoing" : ""}`}>
+    <article
+      className={`message-row${outgoing ? " is-outgoing" : ""}`}
+      data-event-id={message.matrix?.eventId || undefined}
+      data-room-id={message.matrix?.roomId || undefined}
+      data-event-type={message.matrix?.eventType || undefined}
+      data-sender-id={message.matrix?.senderId || undefined}
+    >
       <div className="message-content-wrap">
         {!outgoing && conversation.isGroup && message.senderName && (
           <span className="message-sender">{message.senderName}</span>

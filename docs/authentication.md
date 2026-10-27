@@ -28,10 +28,11 @@ collisions with manually created Synapse accounts. Synapse stores no separate
 user password for this flow.
 
 The browser keeps the app JWT and Matrix access token in memory, not local
-storage. The app refresh cookie is not readable by JavaScript. When
-logging out, send the Matrix access token in the optional `matrix_access_token`
-field to revoke that Synapse session as well as the app refresh-token family.
-App logout still succeeds if Synapse is unavailable.
+storage. The app refresh cookie is not readable by JavaScript. When logging
+out, send the Matrix access token in the optional `matrix_access_token` field
+so FastAPI can revoke the app refresh-token family and attempt Synapse session
+revocation. App logout still succeeds if Synapse is unavailable; Matrix
+revocation is best-effort in that case.
 
 Development uses `APP_REFRESH_COOKIE_SECURE=false` over loopback HTTP. Set it
 to true behind HTTPS; production configuration rejects insecure refresh
@@ -59,9 +60,9 @@ for FastAPI and Synapse.
 
 ## Matrix Device and Encryption Keys
 
-The current browser Matrix client does not manage device keys or encrypted
-events. A future Matrix SDK integration must own device verification,
-key-backup/recovery, and encryption UX. Matrix cryptographic keys are distinct
-from JWT signing keys. Loss of Matrix device keys can make encrypted history
-unreadable; key recovery must be designed and tested. E2EE has not been
-implemented or verified.
+The browser uses the Matrix JavaScript SDK for sync, but does not initialize
+Rust crypto or manage device keys and encrypted events. A future E2EE stage
+must own device verification, key-backup/recovery, and encryption UX. Matrix
+cryptographic keys are distinct from JWT signing keys. Loss of Matrix device
+keys can make encrypted history unreadable; key recovery must be designed and
+tested. E2EE has not been implemented or verified.

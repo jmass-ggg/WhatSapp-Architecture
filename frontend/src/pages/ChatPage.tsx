@@ -5,6 +5,7 @@ import { AppLayout } from "../layouts/AppLayout";
 import { ContactInfoPanel } from "../components/chat/ContactInfoPanel";
 import { ConversationSidebar } from "../components/chat/ConversationSidebar";
 import { ChatHeader } from "../components/chat/ChatHeader";
+import { MatrixConnectionStatus } from "../components/MatrixConnectionStatus";
 import { MessageComposer } from "../components/chat/MessageComposer";
 import { MessageList } from "../components/chat/MessageList";
 import { NewConversationDialog } from "../components/chat/NewConversationDialog";
@@ -45,7 +46,7 @@ export function ChatPage() {
   const [wallpaperIds, setWallpaperIds] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<ToastState | null>(null);
 
-  const matrix = useMatrixRooms(matrixSession, mode === "live");
+  const matrix = useMatrixRooms();
   const conversations =
     mode === "demo" ? demoConversations : mode === "live" ? matrix.rooms : [];
   const selectedConversation =
@@ -67,7 +68,7 @@ export function ChatPage() {
     if (
       conversationId &&
       mode === "live" &&
-      matrix.status === "ready" &&
+      matrix.initialSyncComplete &&
       conversations.length > 0 &&
       !selectedConversation
     ) {
@@ -76,28 +77,10 @@ export function ChatPage() {
   }, [
     conversationId,
     conversations.length,
-    matrix.status,
+    matrix.initialSyncComplete,
     mode,
     navigate,
     selectedConversation,
-  ]);
-
-  useEffect(() => {
-    if (!selectedConversation || selectedConversation.isDemo || !selectedConversation.roomId) {
-      return;
-    }
-    const lastIncoming = [...selectedConversation.messages]
-      .reverse()
-      .find((message) => message.sender === "them");
-    if (selectedConversation.unreadCount > 0 && lastIncoming) {
-      void matrix.markRead(selectedConversation.roomId, lastIncoming.id);
-    }
-  }, [
-    matrix.markRead,
-    selectedConversation?.id,
-    selectedConversation?.messages.length,
-    selectedConversation?.roomId,
-    selectedConversation?.unreadCount,
   ]);
 
   const selectConversation = useCallback(
@@ -117,58 +100,47 @@ export function ChatPage() {
     async (text: string, file?: File) => {
       if (!selectedConversation) return;
 
-      if (mode === "demo") {
-        const sentAt = new Date();
-        const message: Message = {
-          id: crypto.randomUUID(),
-          sender: "me",
-          text,
-          sentAt,
-          delivery: "read",
-          ...(file
-            ? {
-                attachment: {
-                  name: file.name,
-                  size: file.size,
-                  mimeType: file.type,
-                  kind: file.type.startsWith("image/") ? "image" : "file",
-                  url: file.type.startsWith("image/")
-                    ? URL.createObjectURL(file)
-                    : undefined,
-                  demoOnly: true,
-                },
-              }
-            : {}),
-        };
-        setDemoConversations((current) =>
-          current.map((conversation) =>
-            conversation.id === selectedConversation.id
-              ? {
-                  ...conversation,
-                  messages: [...conversation.messages, message],
-                  lastMessage:
-                    text ||
-                    (file ? `You: ${file.name}` : "New message"),
-                  updatedAt: sentAt,
-                  unreadCount: 0,
-                }
-              : conversation,
-          ),
-        );
-        return;
+      if (mode !== "demo") {
+        throw new Error("Live Matrix message sending is not enabled yet.");
       }
 
-      if (!selectedConversation.roomId) {
-        throw new Error("This conversation is still connecting to Matrix.");
-      }
-      if (text.trim()) {
-        await matrix.sendText(selectedConversation.roomId, text.trim());
-      }
-      if (file) {
-        await matrix.sendFile(selectedConversation.roomId, file);
-      }
+      const sentAt = new Date();
+      const message: Message = {
+        id: crypto.randomUUID(),
+        sender: "me",
+        text,
+        sentAt,
+        delivery: "read",
+        ...(file
+          ? {
+              attachment: {
+                name: file.name,
+                size: file.size,
+                mimeType: file.type,
+                kind: file.type.startsWith("image/") ? "image" : "file",
+                url: file.type.startsWith("image/")
+                  ? URL.createObjectURL(file)
+                  : undefined,
+                demoOnly: true,
+              },
+            }
+          : {}),
+      };
+      setDemoConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? {
+                ...conversation,
+                messages: [...conversation.messages, message],
+                lastMessage: text || (file ? `You: ${file.name}` : "New message"),
+                updatedAt: sentAt,
+                unreadCount: 0,
+              }
+            : conversation,
+        ),
+      );
     },
-    [matrix, mode, selectedConversation],
+    [mode, selectedConversation],
   );
 
   const handleNewDirect = useCallback(
@@ -287,6 +259,8 @@ export function ChatPage() {
           mode={mode}
           matrixSession={matrixSession}
           matrixStatus={matrix.status}
+          initialSyncComplete={matrix.initialSyncComplete}
+          authenticationError={matrix.authenticationError}
           onSelect={selectConversation}
           onNewChat={() => setNewChatOpen(true)}
           onSignOut={handleSignOut}
@@ -315,10 +289,15 @@ export function ChatPage() {
               <span>Sample conversations only · messages stay in this browser preview</span>
             </div>
           )}
-          {mode === "live" && matrix.status === "error" && (
-            <div className="matrix-sync-banner" role="status">
-              <span>{matrix.error ?? "Matrix sync is unavailable."}</span>
-              <button type="button" onClick={matrix.retry}>Retry</button>
+          {mode === "live" && matrix.status !== "connected" && (
+            <div className="matrix-sync-banner">
+              <MatrixConnectionStatus
+                status={matrix.status}
+                initialSyncComplete={matrix.initialSyncComplete}
+                authenticationError={matrix.authenticationError}
+                error={matrix.error}
+              />
+              {matrix.error && <span>{matrix.error}</span>}
             </div>
           )}
 
@@ -337,7 +316,7 @@ export function ChatPage() {
           )}
 
           {mode === "live" &&
-            matrix.status === "ready" &&
+            matrix.initialSyncComplete &&
             conversations.length === 0 && (
               <div className="no-rooms-hint">
                 <strong>No conversations yet</strong>
@@ -358,19 +337,19 @@ export function ChatPage() {
 
           {selectedConversation && (
             <MessageComposer
-              disabled={
-                selectedConversation.isEncrypted ||
-                (mode === "live" && matrix.status !== "ready")
-              }
+              disabled={selectedConversation.isEncrypted || mode === "live"}
               busy={false}
               placeholder={
                 selectedConversation.isEncrypted
                   ? "Encrypted messaging is not supported in this client"
                   : mode === "demo"
                   ? "Write a demo message…"
-                  : matrix.status === "ready"
-                    ? "Write a message…"
-                    : "Connecting to Matrix…"
+                  : "Matrix message sending is not enabled yet"
+              }
+              hint={
+                mode === "live"
+                  ? "Live room events synchronize here; message sending is deferred to a later step."
+                  : undefined
               }
               onSend={sendMessage}
             />

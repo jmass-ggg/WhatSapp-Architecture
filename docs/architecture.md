@@ -7,7 +7,9 @@ React frontend uses FastAPI for application identity, profiles, and directory
 search. After app-password validation, FastAPI exchanges a short-lived,
 server-only JWT with Synapse and returns Synapse's Matrix session to the
 browser. The frontend uses Synapse's Client-Server API for room sync, direct
-room creation, messages, and media. End-to-end encryption is not implemented.
+room creation, incoming event display, and media downloads. Live message
+sending, media uploads, and read-marker submission are deferred. End-to-end
+encryption is not implemented.
 
 ```mermaid
 flowchart LR
@@ -48,8 +50,8 @@ port is not published to the host.
 
 | Component | Owns |
 | --- | --- |
-| React frontend | LumaChat login/registration, responsive conversation UI, demo preview, in-memory auth state, Matrix room sync, direct-room creation, text messages, file upload/download, and read receipts. |
-| Browser Matrix API client | Calls Synapse directly for room state, sync, events, and media. It does not provide device-key management, encryption, or decryption. |
+| React frontend | LumaChat login/registration, responsive conversation UI, demo preview, in-memory auth state, read-only Matrix room sync, incoming event display, direct-room creation, and received media display. |
+| Browser Matrix API client | Calls Synapse directly for room state, sync, events, direct-room creation, and media downloads. Live text/file sending, uploads, and read markers are not connected; device-key management, encryption, and decryption are also absent. |
 | FastAPI | Owns app registration/login, app JWT and refresh sessions, user/profile APIs, directory visibility, configurable entitlements, and the narrow Synapse JWT login/logout exchange. |
 | Synapse | Matrix users/devices; room membership/state; message delivery and history; synchronization; typing and receipt events; Matrix authentication; media repository/API; federation if explicitly enabled. |
 | PostgreSQL | Separate Synapse and FastAPI containers, databases, non-superuser app roles, private networks, and persistent volumes. |
@@ -68,10 +70,10 @@ Synapse is the source of truth for Matrix data.
    Matrix account on first login, and returns its own Matrix access token.
 4. The browser keeps both returned credentials in memory, uses the app JWT
    only with FastAPI, and starts Matrix sync with the Matrix access token.
-5. The browser submits messages to Synapse; Synapse persists and routes
-   events to other clients' sync streams.
-6. Typing notifications and read receipts use Matrix APIs, not duplicate
-   FastAPI state.
+5. Synapse persists and routes Matrix events; the browser syncs and renders
+   incoming events. The live composer is disabled in this integration stage.
+6. Typing and receipt state remain Matrix-owned; this stage does not submit
+   read markers or add a read-receipt interface.
 7. Logout revokes the app refresh-token family and, when the browser supplies
    its Matrix access token, asks Synapse to revoke that device session.
 

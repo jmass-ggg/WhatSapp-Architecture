@@ -370,6 +370,44 @@
   white-space: nowrap;
 }
 
+.matrix-connection-status {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: #75827a;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.matrix-connection-status.is-compact {
+  gap: 5px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.matrix-connection-indicator {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #adb8b0;
+}
+
+.matrix-connection-status.is-connected .matrix-connection-indicator {
+  background: #12b95b;
+}
+
+.matrix-connection-status.is-connecting .matrix-connection-indicator,
+.matrix-connection-status.is-reconnecting .matrix-connection-indicator {
+  background: #dca640;
+}
+
+.matrix-connection-status.is-error .matrix-connection-indicator,
+.matrix-connection-status.is-disconnected .matrix-connection-indicator {
+  background: #d75b55;
+}
+
 .sidebar-account-menu {
   display: inline-flex;
   width: 30px;
@@ -627,13 +665,14 @@
   font-size: 10px;
 }
 
-.matrix-sync-banner button {
-  border: 0;
-  background: transparent;
-  color: #816320;
-  font-size: 10px;
-  font-weight: 700;
-  cursor: pointer;
+.matrix-sync-banner .matrix-connection-status {
+  flex: 0 0 auto;
+}
+
+.matrix-sync-banner > span:not(.matrix-connection-status) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .message-search-row {

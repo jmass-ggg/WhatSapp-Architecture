@@ -78,6 +78,12 @@ export interface Message {
     emoji: string;
     count: number;
   };
+  matrix?: {
+    eventId: string;
+    roomId: string;
+    eventType: string;
+    senderId: string;
+  };
 }
 
 export interface Conversation {

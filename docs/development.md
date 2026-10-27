@@ -38,8 +38,9 @@ npm run build
 ```
 
 The frontend calls the existing FastAPI auth, profile, and directory routes.
-It uses Synapse directly for Matrix sync, room creation, messages, media, and
-read receipts. The demo preview is local-only and explicitly labeled. See
+It uses Synapse directly for Matrix sync, direct-room creation, incoming
+events, and received-media display. Live sending, uploads, and read markers
+are not enabled; the demo preview is local-only and explicitly labeled. See
 [`frontend/README.md`](../frontend/README.md) for route behavior and known
 limitations.
 
