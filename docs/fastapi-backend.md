@@ -38,16 +38,16 @@ superuser, and creates/drops only the test schema there.
 | Table | Data and constraints |
 | --- | --- |
 | `users` | UUID, case-insensitive unique email and username, Argon2id hash, active/email-verified flags, role, and timestamps. Roles are constrained to `user` or `admin`. |
-| `profiles` | One-to-one user foreign key, display name, picture URL, bio, job title, department, organization label, and update timestamp. |
+| `profiles` | One-to-one user foreign key, display name, picture URL, bio, job title, department, and update timestamp. |
 | `subscriptions` | UUID, user, `free`/`pro`/`enterprise` plan, status, start/expiry, optional administrator actor, and timestamps. Database checks validate plan/status and expiry ordering. |
 | `refresh_tokens` | UUID, user, unique SHA-256 token hash, family ID, expiry/revocation timestamps, and optional self-reference to the replacing token. |
 | `user_connections` | UUID, requester and recipient users, pending/accepted/declined/blocked status, timestamps, and accepted timestamp. A database constraint prevents self-requests and duplicate or reverse-direction pairs. |
 
 The model and initial schema are in `backend/app/models/` and
 the Alembic history. Migration `0002_user_connections` adds connections and
-removes the obsolete organization table and user foreign key. The free-text
-`profiles.organization` label remains. Passwords and raw refresh tokens are not
-persisted.
+removes the obsolete organization table and user foreign key.
+`0003_remove_profile_organization` removes the remaining profile organization
+label. Passwords and raw refresh tokens are not persisted.
 
 ## Authentication
 

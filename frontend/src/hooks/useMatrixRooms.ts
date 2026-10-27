@@ -18,10 +18,6 @@ export interface UseMatrixRoomsResult {
     displayName: string,
     matrixUserId: string,
   ) => Promise<string>;
-  createEncryptedGroup: (
-    displayName: string,
-    matrixUserIds: string[],
-  ) => Promise<string>;
 }
 
 export function useMatrixRooms(): UseMatrixRoomsResult {
@@ -73,18 +69,6 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
     },
     [client],
   );
-  const createEncryptedGroup = useCallback(
-    async (displayName: string, matrixUserIds: string[]) => {
-      if (!client) throw new Error("Sign in to start an encrypted group.");
-      return createEncryptedRoom(client, {
-        invitees: matrixUserIds,
-        name: displayName,
-        isDirect: false,
-      });
-    },
-    [client],
-  );
-
   return {
     rooms,
     status,
@@ -94,6 +78,5 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
     authenticationError,
     recentEvents,
     createDirect,
-    createEncryptedGroup,
   };
 }

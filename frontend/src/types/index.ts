@@ -14,7 +14,6 @@ export interface UserProfile {
     bio: string | null;
     job_title: string | null;
     department: string | null;
-    organization: string | null;
   };
 }
 

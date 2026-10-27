@@ -58,7 +58,6 @@ const demoUser: UserProfile = {
     bio: "Good conversations make the day brighter.",
     job_title: "Product designer",
     department: "Design",
-    organization: "LumaChat",
   },
 };
 

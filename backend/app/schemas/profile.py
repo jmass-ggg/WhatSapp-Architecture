@@ -14,18 +14,16 @@ class ProfileRead(BaseModel):
     bio: str | None
     job_title: str | None
     department: str | None
-    organization: str | None
 
 
 class ProfilePatch(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     profile_picture_url: HttpUrl | None = None
     bio: str | None = Field(default=None, max_length=500)
     job_title: str | None = Field(default=None, max_length=120)
     department: str | None = Field(default=None, max_length=120)
-    organization: str | None = Field(default=None, max_length=160)
 
     @model_validator(mode="after")
     def validate_patch(self) -> ProfilePatch:

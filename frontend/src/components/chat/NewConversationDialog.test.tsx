@@ -15,7 +15,6 @@ const kanye: DirectoryUser = {
     bio: null,
     job_title: null,
     department: null,
-    organization: null,
   },
 };
 

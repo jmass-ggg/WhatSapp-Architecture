@@ -20,10 +20,10 @@ Completion condition: Alice and Bob exchange encrypted messages in two browsers.
 
 10
 
-Develop group messaging
+Keep the active interface focused on one-to-one chats
 
-Add group creation, invitations, member lists, group names/photos and encrypted group conversations. Include member permissions.
-Completion condition: Three or more users can communicate in a group.
+Keep existing Matrix group rooms and their history intact, but do not expose group creation or group rooms in the active application.
+Completion condition: the active conversation list contains only private one-to-one rooms.
 
 
 

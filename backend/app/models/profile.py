@@ -25,7 +25,6 @@ class Profile(Base):
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     job_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     department: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    organization: Mapped[str | None] = mapped_column(String(160), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -259,7 +259,7 @@ export function ConversationSidebar({
         <div className="sidebar-account-copy">
           <strong>{displayName}</strong>
           {mode === "demo" ? (
-            <span>Demo workspace</span>
+            <span>Demo mode</span>
           ) : (
             <MatrixConnectionStatus
               status={matrixStatus}

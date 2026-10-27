@@ -89,4 +89,43 @@ describe("Matrix room mapping", () => {
     const [conversation] = conversationsFromMatrixClient([room], "@self:localhost");
     expect(conversation.updatedAt.getTime()).toBe(0);
   });
+
+  it("keeps group rooms out of the active conversation list", () => {
+    const otherMember = {
+      userId: "@other:localhost",
+      membership: "join",
+      name: "Other User",
+      typing: false,
+      events: { member: { getContent: () => ({}) } },
+    };
+    const anotherMember = {
+      ...otherMember,
+      userId: "@third:localhost",
+      name: "Third User",
+    };
+    const makeRoom = (roomId: string, members: typeof otherMember[]) =>
+      ({
+        roomId,
+        name: "",
+        getMembers: () => members,
+        getLiveTimeline: () => ({ getEvents: () => [] }),
+        getMyMembership: () => "join",
+        hasEncryptionStateEvent: () => true,
+        getUnreadNotificationCount: () => 0,
+        getLastActiveTimestamp: () => 0,
+        guessDMUserId: () => members[0]?.userId,
+      }) as unknown as Room;
+
+    const conversations = conversationsFromMatrixClient(
+      [
+        makeRoom("!direct:localhost", [otherMember]),
+        makeRoom("!group:localhost", [otherMember, anotherMember]),
+      ],
+      "@self:localhost",
+    );
+
+    expect(conversations.map((conversation) => conversation.id)).toEqual([
+      "!direct:localhost",
+    ]);
+  });
 });

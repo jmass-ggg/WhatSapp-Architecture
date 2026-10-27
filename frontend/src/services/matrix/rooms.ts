@@ -95,5 +95,6 @@ export function conversationsFromMatrixClient(
   return rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
     .map((room) => conversationFromMatrixRoom(room, ownUserId))
+    .filter((conversation) => !conversation.isGroup)
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }

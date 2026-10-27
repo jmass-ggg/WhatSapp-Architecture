@@ -39,12 +39,21 @@ def test_me_profile_update_and_self_user_update(
             "display_name": "Updated Display",
             "bio": "A short profile biography",
             "job_title": "Engineer",
-            "organization": "Self-described organization",
         },
     )
     assert profile_update.status_code == 200
     assert profile_update.json()["display_name"] == "Updated Display"
-    assert profile_update.json()["organization"] == "Self-described organization"
+    assert "organization" not in profile_update.json()
+
+    removed_field_update = client.patch(
+        "/api/v1/profiles/me",
+        headers=headers,
+        json={
+            "bio": "A changed bio",
+            "organization": "Removed field",
+        },
+    )
+    assert removed_field_update.status_code == 422
 
     account_update = client.patch(
         "/api/v1/users/me",
