@@ -14,22 +14,31 @@ class FixedWindowRateLimiter:
         self._lock = Lock()
         self._windows: dict[str, tuple[float, int]] = defaultdict(lambda: (0.0, 0))
 
-    def check(self, key: str) -> int:
+    def check(
+        self,
+        key: str,
+        *,
+        attempts: int | None = None,
+        window_seconds: int | None = None,
+        detail: str = "Too many login attempts",
+    ) -> int:
+        max_attempts = attempts or settings.app_login_rate_limit_attempts
+        window = window_seconds or settings.app_login_rate_limit_window_seconds
         now = monotonic()
         with self._lock:
             started_at, count = self._windows[key]
-            if now - started_at >= settings.app_login_rate_limit_window_seconds:
+            if now - started_at >= window:
                 started_at, count = now, 0
             count += 1
             self._windows[key] = (started_at, count)
-            if count > settings.app_login_rate_limit_attempts:
+            if count > max_attempts:
                 retry_after = max(
                     1,
-                    int(settings.app_login_rate_limit_window_seconds - (now - started_at)),
+                    int(window - (now - started_at)),
                 )
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many login attempts",
+                    detail=detail,
                     headers={"Retry-After": str(retry_after)},
                 )
         return count
@@ -40,8 +49,18 @@ class FixedWindowRateLimiter:
 
 
 login_rate_limiter = FixedWindowRateLimiter()
+directory_search_rate_limiter = FixedWindowRateLimiter()
 
 
 def limit_login(request: Request) -> None:
     client_host = request.client.host if request.client else "unknown"
     login_rate_limiter.check(client_host)
+
+
+def limit_directory_search(user_id: str) -> None:
+    directory_search_rate_limiter.check(
+        f"directory:{user_id}",
+        attempts=settings.app_directory_rate_limit_attempts,
+        window_seconds=settings.app_directory_rate_limit_window_seconds,
+        detail="Too many directory searches",
+    )

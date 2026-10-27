@@ -23,14 +23,15 @@ browser. Production browser traffic must use intentional HTTPS origins.
 
 ## FastAPI-Owned Operations
 
-FastAPI owns application accounts, profile metadata, organization-scoped
-directory visibility, app JWTs and refresh sessions, feature entitlements, and
+FastAPI owns application accounts, profile metadata, global username discovery,
+connection requests, app JWTs and refresh sessions, feature entitlements, and
 health checks. Implemented routes include:
 
 | Route | Responsibility |
 | --- | --- |
 | `POST /api/v1/auth/register`, `/login`, `/refresh`, `/logout`; `GET /api/v1/auth/me` | App authentication and session lifecycle. Login returns an app JWT plus a Synapse-issued Matrix session. |
-| `GET/PATCH /api/v1/users/me`; `GET /api/v1/users`, `/search`, `/{user_id}` | Self-service account changes and authorized directory lookup. |
+| `GET/PATCH /api/v1/users/me`; `GET /api/v1/users/search`; `GET /api/v1/users/{user_id}` | Self-service account changes, authenticated and rate-limited global username search, and self/admin profile lookup. Search excludes the caller and returns public profile fields only. |
+| `POST /api/v1/connections/requests`; `GET /api/v1/connections/requests/incoming`, `/outgoing`; `POST /api/v1/connections/{id}/accept`, `/decline`; `GET /api/v1/connections` | Persisted user-to-user connection requests. Only the recipient can accept or decline; only accepted connections are returned as contacts. |
 | `GET /api/v1/profiles/{user_id}`; `PATCH /api/v1/profiles/me` | Read a visible profile or update the caller's profile. |
 | `GET /api/v1/subscriptions/me`, `/plans`; `GET /api/v1/access/check` | Illustrative plans and configured feature checks. |
 | `PUT /api/v1/subscriptions/{user_id}` | Admin-only entitlement updates. |
@@ -43,6 +44,17 @@ short-lived, server-signed JWT using Synapse's `org.matrix.login.jwt` flow.
 Synapse creates the mapped Matrix account on first login and issues the Matrix
 access token. FastAPI does not create passwords in Synapse or proxy rooms,
 synchronization, media, typing, or receipts.
+
+FastAPI checks accepted-connection state for application connection actions.
+The browser creates or reuses an encrypted direct room only after acceptance,
+then invites the other user through the Matrix SDK. Because clients hold
+Synapse-issued access tokens and call the homeserver directly, FastAPI cannot
+enforce app connection state on arbitrary Matrix Client-Server API calls.
+Enforcing that boundary for every homeserver client would require a Synapse
+authorization integration or routing Matrix operations through an enforcement
+service; neither is part of the current architecture. E2EE remains enforced by
+the Matrix SDK and homeserver room state, independently of this app-level
+connection gate.
 
 ## Matrix-Owned Operations
 

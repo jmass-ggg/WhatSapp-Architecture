@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
-    ForeignKey,
     Index,
     String,
     Uuid,
@@ -24,7 +23,6 @@ class User(Base):
         CheckConstraint("role IN ('user', 'admin')", name="ck_users_role"),
         Index("uq_users_email_lower", func.lower(text("email")), unique=True),
         Index("uq_users_username_lower", func.lower(text("username")), unique=True),
-        Index("ix_users_organization_id", "organization_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -43,11 +41,6 @@ class User(Base):
         server_default=text("'user'"),
         nullable=False,
     )
-    organization_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("organizations.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -65,7 +58,6 @@ class User(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    organization: Mapped[Organization | None] = relationship(back_populates="users")
     subscriptions: Mapped[list[Subscription]] = relationship(
         back_populates="user",
         foreign_keys="Subscription.user_id",
@@ -80,4 +72,3 @@ class User(Base):
 from app.models.profile import Profile  # noqa: E402
 from app.models.refresh_token import RefreshToken  # noqa: E402
 from app.models.subscription import Subscription  # noqa: E402
-from app.models.organization import Organization  # noqa: E402

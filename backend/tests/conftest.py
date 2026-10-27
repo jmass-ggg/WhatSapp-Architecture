@@ -15,12 +15,11 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 from app.api.dependencies import get_matrix_client
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.rate_limit import login_rate_limiter
+from app.core.rate_limit import directory_search_rate_limiter, login_rate_limiter
 from app.core.security import hash_password
 from app.main import create_app
 from app.integrations.matrix.client import MatrixConnectionError, MatrixSession
 from app.models.base import Base
-from app.models.organization import Organization
 from app.models.profile import Profile
 from app.models.subscription import Subscription
 from app.models.user import User
@@ -105,6 +104,7 @@ def client(
 ):
     monkeypatch.setattr(settings, "app_registration_enabled", True)
     login_rate_limiter.clear()
+    directory_search_rate_limiter.clear()
     factory = sessionmaker(bind=test_engine, autoflush=False, expire_on_commit=False)
 
     def override_get_db():
@@ -125,7 +125,6 @@ def create_test_user(
     username: str | None = None,
     email: str | None = None,
     role: str = "user",
-    organization_id=None,
     verified: bool = True,
     password: str = "Correct horse battery staple 17",
 ) -> User:
@@ -139,7 +138,6 @@ def create_test_user(
         is_active=True,
         is_email_verified=verified,
         role=role,
-        organization_id=organization_id,
     )
     profile = Profile(user=user, display_name=username.title())
     subscription = Subscription(
@@ -158,20 +156,5 @@ def create_test_user(
 def user_factory(db_session: Session):
     def create(**kwargs) -> User:
         return create_test_user(db_session, **kwargs)
-
-    return create
-
-
-@pytest.fixture
-def organization_factory(db_session: Session):
-    def create(name: str = "Example Organization") -> Organization:
-        organization = Organization(
-            name=name,
-            slug=f"org-[redacted]{uuid4().hex[:12]}",
-        )
-        db_session.add(organization)
-        db_session.commit()
-        db_session.refresh(organization)
-        return organization
 
     return create

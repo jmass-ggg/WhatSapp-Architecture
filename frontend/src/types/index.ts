@@ -42,7 +42,7 @@ export interface AccessTokenResponse {
 export interface DirectoryUser {
   id: string;
   username: string;
-  profile: UserProfile["profile"];
+  profile: UserProfile["profile"] | null;
 }
 
 export interface DirectoryPage {
@@ -50,6 +50,25 @@ export interface DirectoryPage {
   limit: number;
   offset: number;
   total: number;
+}
+
+export interface ConnectionUser {
+  id: string;
+  username: string;
+  profile: UserProfile["profile"] | null;
+}
+
+export type ConnectionStatus = "pending" | "accepted" | "declined" | "blocked";
+
+export interface UserConnection {
+  id: string;
+  requester_id: string;
+  recipient_id: string;
+  status: ConnectionStatus;
+  created_at: string;
+  updated_at: string;
+  accepted_at: string | null;
+  other_user: ConnectionUser;
 }
 
 export interface Attachment {
@@ -106,6 +125,9 @@ export interface Conversation {
   isGroup?: boolean;
   isEncrypted?: boolean;
   roomId?: string;
+  contactUserId?: string;
+  connectionUserId?: string;
+  connectionAllowed?: boolean;
 }
 
 export type AuthMode = "live" | "demo";

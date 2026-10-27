@@ -8,9 +8,9 @@ import type {
   Conversation,
   DirectoryPage,
   DirectoryUser,
+  UserConnection,
 } from "../../types";
 import { ApiError } from "../../services/api/client";
-import { mappedMatrixUserId } from "../../services/matrix/identity";
 
 interface NewConversationDialogProps {
   open: boolean;
@@ -18,12 +18,12 @@ interface NewConversationDialogProps {
   api: ApiClient;
   currentUserId: string;
   conversations: Conversation[];
+  connections: UserConnection[];
+  incomingRequests: UserConnection[];
+  outgoingRequests: UserConnection[];
   onClose: () => void;
   onSelectDemo: (conversation: Conversation) => void;
-  onCreateDirect: (
-    user: DirectoryUser,
-    matrixUserId: string,
-  ) => Promise<void>;
+  onSendRequest: (user: DirectoryUser) => Promise<void>;
 }
 
 export function NewConversationDialog({
@@ -32,14 +32,18 @@ export function NewConversationDialog({
   api,
   currentUserId,
   conversations,
+  connections,
+  incomingRequests,
+  outgoingRequests,
   onClose,
   onSelectDemo,
-  onCreateDirect,
+  onSendRequest,
 }: NewConversationDialogProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DirectoryUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [sentRequestIds, setSentRequestIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -91,18 +95,31 @@ export function NewConversationDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, open]);
 
+  useEffect(() => {
+    const pendingIds = new Set(
+      outgoingRequests.map((request) => request.other_user.id),
+    );
+    setSentRequestIds((current) => {
+      const remaining = new Set(
+        [...current].filter((userId) => pendingIds.has(userId)),
+      );
+      return remaining.size === current.size ? current : remaining;
+    });
+  }, [outgoingRequests]);
+
   if (!open) return null;
 
-  async function startConversation(user: DirectoryUser) {
+  async function sendConnectionRequest(user: DirectoryUser) {
     setBusyUserId(user.id);
     setError("");
     try {
-      await onCreateDirect(user, mappedMatrixUserId(user));
+      await onSendRequest(user);
+      setSentRequestIds((current) => new Set(current).add(user.id));
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "We couldn't start that conversation.",
+          : "We couldn't send that connection request.",
       );
     } finally {
       setBusyUserId(null);
@@ -139,7 +156,7 @@ export function NewConversationDialog({
             <p>
               {mode === "demo"
                 ? "Choose a sample conversation. Nothing is sent to a server."
-                : "Find a LumaChat user and invite them to a Matrix direct room."}
+                : "Search by username and send a connection request. You can chat after they accept."}
             </p>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
@@ -152,7 +169,7 @@ export function NewConversationDialog({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={mode === "demo" ? "Find a sample contact" : "Search name or username"}
+            placeholder={mode === "demo" ? "Find a sample contact" : "Search username"}
             autoFocus
             autoComplete="off"
           />
@@ -185,12 +202,12 @@ export function NewConversationDialog({
           ) : loading ? (
             <div className="directory-state"><LoaderCircle className="spin" size={20} /> Searching users…</div>
           ) : query.trim().length < 2 ? (
-            <div className="directory-state">Type at least 2 characters to search the app directory.</div>
+              <div className="directory-state">Type at least 2 characters to search usernames.</div>
           ) : results.length === 0 && !error ? (
             <div className="directory-state">No people found. Try another name or username.</div>
           ) : (
             results.map((user) => {
-              const name = user.profile.display_name || user.username;
+              const name = user.profile?.display_name || user.username;
               const initials = name
                 .trim()
                 .split(/\s+/)
@@ -198,30 +215,50 @@ export function NewConversationDialog({
                 .map((part) => part[0])
                 .join("")
                 .toUpperCase();
+              const isConnected = connections.some(
+                (connection) => connection.other_user.id === user.id,
+              );
+              const hasIncomingRequest = incomingRequests.some(
+                (request) => request.other_user.id === user.id,
+              );
+              const hasOutgoingRequest =
+                sentRequestIds.has(user.id) ||
+                outgoingRequests.some((request) => request.other_user.id === user.id);
+              const actionLabel = isConnected
+                ? "Connected"
+                : hasOutgoingRequest
+                  ? "Request Sent"
+                  : hasIncomingRequest
+                    ? "Respond to Request"
+                    : "Add Contact";
               return (
-                <button
-                  type="button"
-                  className="directory-result"
-                  key={user.id}
-                  onClick={() => void startConversation(user)}
-                  disabled={busyUserId !== null}
-                >
+                <div className="directory-result" key={user.id}>
                   <UserAvatar
                     name={name}
                     initials={initials}
                     size="md"
-                    avatarUrl={user.profile.profile_picture_url}
+                    avatarUrl={user.profile?.profile_picture_url}
                   />
                   <span className="directory-result-copy">
                     <strong>{name}</strong>
                     <small>@{user.username}</small>
                   </span>
-                  {busyUserId === user.id ? (
-                    <LoaderCircle className="spin" size={17} />
-                  ) : (
-                    <ArrowUpRight size={17} />
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    className="add-contact-button"
+                    onClick={() => void sendConnectionRequest(user)}
+                    disabled={
+                      busyUserId !== null ||
+                      isConnected ||
+                      hasOutgoingRequest ||
+                      hasIncomingRequest
+                    }
+                  >
+                    {busyUserId === user.id ? (
+                      <LoaderCircle className="spin" size={14} />
+                    ) : actionLabel}
+                  </button>
+                </div>
               );
             })
           )}

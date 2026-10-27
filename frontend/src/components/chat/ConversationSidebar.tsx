@@ -12,7 +12,13 @@ import { MatrixConnectionStatus } from "../MatrixConnectionStatus";
 import { SearchInput } from "../SearchInput";
 import { UserAvatar } from "../UserAvatar";
 import { ConversationListItem } from "./ConversationListItem";
-import type { AuthMode, Conversation, MatrixSession, UserProfile } from "../../types";
+import type {
+  AuthMode,
+  Conversation,
+  MatrixSession,
+  UserConnection,
+  UserProfile,
+} from "../../types";
 import type { MatrixConnectionStatus as ConnectionStatus } from "../../services/matrix/session";
 
 interface ConversationSidebarProps {
@@ -24,7 +30,13 @@ interface ConversationSidebarProps {
   matrixStatus: ConnectionStatus;
   initialSyncComplete: boolean;
   authenticationError: boolean;
+  incomingRequests: UserConnection[];
+  requestsLoading: boolean;
+  requestError: string | null;
+  respondingRequestId: string | null;
   onSelect: (conversation: Conversation) => void;
+  onAcceptRequest: (request: UserConnection) => void;
+  onDeclineRequest: (request: UserConnection) => void;
   onNewChat: () => void;
   onSignOut: () => void;
   onSettings: () => void;
@@ -39,7 +51,13 @@ export function ConversationSidebar({
   matrixStatus,
   initialSyncComplete,
   authenticationError,
+  incomingRequests,
+  requestsLoading,
+  requestError,
+  respondingRequestId,
   onSelect,
+  onAcceptRequest,
+  onDeclineRequest,
   onNewChat,
   onSignOut,
   onSettings,
@@ -131,6 +149,73 @@ export function ConversationSidebar({
           label="Search conversations"
         />
       </div>
+
+      {mode === "live" && (
+        <section className="connection-requests" aria-label="Connection Requests">
+          <div className="sidebar-list-heading">
+            <span>Connection Requests</span>
+            <span>{incomingRequests.length}</span>
+          </div>
+          {requestsLoading ? (
+            <div className="connection-request-state">Loading requests…</div>
+          ) : requestError ? (
+            <div className="connection-request-state is-error" role="alert">
+              {requestError}
+            </div>
+          ) : incomingRequests.length === 0 ? (
+            <div className="connection-request-state">No pending requests</div>
+          ) : (
+            <div className="connection-request-list">
+              {incomingRequests.map((request) => {
+                const contact = request.other_user;
+                const name = contact.profile?.display_name || contact.username;
+                const initials = name
+                  .trim()
+                  .split(/\s+/)
+                  .slice(0, 2)
+                  .map((part) => part[0])
+                  .join("")
+                  .toUpperCase();
+                const busy = respondingRequestId === request.id;
+                return (
+                  <div className="connection-request-card" key={request.id}>
+                    <div className="connection-request-person">
+                      <UserAvatar
+                        name={name}
+                        initials={initials}
+                        size="sm"
+                        avatarUrl={contact.profile?.profile_picture_url}
+                        matrixToken={matrixSession?.access_token}
+                      />
+                      <span>
+                        <strong>{name}</strong>
+                        <small>@{contact.username}</small>
+                      </span>
+                    </div>
+                    <div className="connection-request-actions">
+                      <button
+                        type="button"
+                        onClick={() => onAcceptRequest(request)}
+                        disabled={respondingRequestId !== null}
+                      >
+                        {busy ? "Working…" : "Accept"}
+                      </button>
+                      <button
+                        type="button"
+                        className="is-secondary"
+                        onClick={() => onDeclineRequest(request)}
+                        disabled={respondingRequestId !== null}
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="sidebar-list-heading">
         <span>Messages</span>

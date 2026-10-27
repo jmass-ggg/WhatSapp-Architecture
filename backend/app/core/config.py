@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     app_refresh_cookie_secure: bool = False
     app_login_rate_limit_attempts: int = Field(default=10, ge=1, le=100)
     app_login_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    app_directory_rate_limit_attempts: int = Field(default=30, ge=1, le=1000)
+    app_directory_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
 
     synapse_server_name: str = Field(
         default="localhost",

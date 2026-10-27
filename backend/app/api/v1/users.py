@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentUser
 from app.core.database import get_db
 from app.core.permissions import require_feature
+from app.core.rate_limit import limit_directory_search
 from app.models.user import User
 from app.schemas.user import UserDirectoryRead, UserMeRead, UserPage, UserPatch
 from app.services.users import get_visible_user, search_users, update_user
@@ -40,27 +41,18 @@ def patch_me(
 def search_directory(
     user: DirectoryUser,
     db: Annotated[Session, Depends(get_db)],
-    q: Annotated[str, Query(min_length=2, max_length=80)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    q: Annotated[str, Query(min_length=2, max_length=32)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
     offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
 ) -> UserPage:
-    items, total = search_users(db, user, query=q.strip(), limit=limit, offset=offset)
-    return UserPage(
-        items=[UserDirectoryRead.model_validate(item) for item in items],
-        limit=limit,
-        offset=offset,
-        total=total,
-    )
-
-
-@router.get("", response_model=UserPage)
-def list_directory(
-    user: DirectoryUser,
-    db: Annotated[Session, Depends(get_db)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
-) -> UserPage:
-    items, total = search_users(db, user, query=None, limit=limit, offset=offset)
+    query = q.strip()
+    if len(query) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Search query must contain at least two non-space characters",
+        )
+    limit_directory_search(str(user.id))
+    items, total = search_users(db, user, query=query, limit=limit, offset=offset)
     return UserPage(
         items=[UserDirectoryRead.model_validate(item) for item in items],
         limit=limit,

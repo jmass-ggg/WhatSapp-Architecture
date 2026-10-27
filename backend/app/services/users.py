@@ -3,22 +3,16 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.profile import Profile
 from app.models.user import User
 from app.schemas.user import UserPatch
 
 
 def can_view_user(viewer: User, subject: User) -> bool:
-    if viewer.id == subject.id or viewer.role == "admin":
-        return True
-    return (
-        viewer.organization_id is not None
-        and viewer.organization_id == subject.organization_id
-    )
+    return viewer.id == subject.id or viewer.role == "admin"
 
 
 def get_visible_user(db: Session, viewer: User, subject_id: UUID) -> User:
@@ -68,19 +62,15 @@ def search_users(
 ) -> tuple[list[User], int]:
     statement = (
         select(User)
-        .join(User.profile)
+        .outerjoin(User.profile)
         .options(selectinload(User.profile))
-        .where(User.is_active.is_(True))
+        .where(User.is_active.is_(True), User.id != viewer.id)
     )
-    count_statement = select(func.count(User.id)).join(User.profile).where(User.is_active.is_(True))
-
-    if viewer.role != "admin":
-        if viewer.organization_id is None:
-            scope_filter = User.id == viewer.id
-        else:
-            scope_filter = User.organization_id == viewer.organization_id
-        statement = statement.where(scope_filter)
-        count_statement = count_statement.where(scope_filter)
+    count_statement = (
+        select(func.count(User.id))
+        .outerjoin(User.profile)
+        .where(User.is_active.is_(True), User.id != viewer.id)
+    )
 
     if query:
         escaped = (
@@ -90,10 +80,7 @@ def search_users(
             .replace("_", "\\_")
         )
         pattern = f"{escaped}%"
-        search_filter = or_(
-            func.lower(User.username).like(pattern, escape="\\"),
-            func.lower(Profile.display_name).like(pattern, escape="\\"),
-        )
+        search_filter = func.lower(User.username).like(pattern, escape="\\")
         statement = statement.where(search_filter)
         count_statement = count_statement.where(search_filter)
 

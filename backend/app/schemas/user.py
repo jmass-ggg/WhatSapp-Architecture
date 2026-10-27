@@ -27,7 +27,7 @@ class UserDirectoryRead(BaseModel):
 
     id: UUID
     username: str
-    profile: ProfileRead
+    profile: ProfileRead | None
 
 
 class UserPatch(BaseModel):

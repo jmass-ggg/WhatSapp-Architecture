@@ -7,7 +7,13 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.models.base import Base
-from app.models import organization, profile, refresh_token, subscription, user  # noqa: F401
+from app.models import (
+    profile,
+    refresh_token,
+    subscription,
+    user,
+    user_connection,
+)  # noqa: F401
 
 
 config = context.config

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright-core";
@@ -106,43 +105,6 @@ async function register(label) {
   });
   assert.equal(response.status, 201, `Register ${label}: HTTP ${response.status}`);
   return { username, profile: await response.json() };
-}
-
-function provisionIsolatedOrganization(alice, bob) {
-  if (process.env.LUMACHAT_TEST_PROVISION_ORG !== "1") {
-    throw new Error("Set LUMACHAT_TEST_PROVISION_ORG=1 to place isolated test users in one development organization.");
-  }
-  const code = `
-import sys
-from uuid import UUID
-from sqlalchemy import select
-from app.core.config import settings
-from app.core.database import SessionLocal
-from app.models.organization import Organization
-from app.models.user import User
-
-run_id, alice_id, bob_id = sys.argv[1:]
-if settings.app_env != "development":
-    raise SystemExit("Step 08 provisioning requires a development backend")
-with SessionLocal() as db:
-    users = [db.get(User, UUID(alice_id)), db.get(User, UUID(bob_id))]
-    for label, user in zip(("alice", "bob"), users):
-        if user is None or user.username != f"step08_{label}_{run_id}" or user.organization_id is not None:
-            raise SystemExit("Refusing to modify a non-isolated test user")
-    org = Organization(name=f"Step 08 isolated {run_id}", slug=f"step08-{run_id}")
-    db.add(org)
-    db.flush()
-    for user in users:
-        user.organization_id = org.id
-    db.commit()
-`;
-  const result = spawnSync("docker", [
-    "compose", "-f", "../compose.backend.yaml", "exec", "-T", "backend",
-    "python", "-c", code, runId, alice.profile.id, bob.profile.id,
-  ], { encoding: "utf8", timeout: 10_000 });
-  if (result.status !== 0) {
-    throw new Error(`Isolated organization provisioning failed: ${result.stderr || result.error?.message}`);
-  }
 }
 
 async function login(page, account, reused) {
@@ -450,12 +412,7 @@ try {
   let bob = cached?.bob;
   if (!alice || !bob) {
     [alice, bob] = await Promise.all([register("alice"), register("bob")]);
-    cached = { runId, password, alice, bob, provisioned: false };
-    saveCache();
-  }
-  if (!cached?.provisioned) {
-    provisionIsolatedOrganization(alice, bob);
-    cached.provisioned = true;
+    cached = { runId, password, alice, bob };
     saveCache();
   }
   // Refresh before creating the context so its final storageState cannot overwrite the rotated cookie.
@@ -473,8 +430,11 @@ try {
   );
   assert.equal(directoryResponse.status, 200, "Alice directory request");
   const directoryPage = await directoryResponse.json();
-  assert.ok(directoryPage.items.some((user) => user.id === bob.profile.id), "Bob must be visible in Alice's scoped directory");
-  console.log("PASS isolated same-organization directory lookup");
+  assert.ok(directoryPage.items.some((user) => user.id === bob.profile.id), "Bob must be visible in global username search");
+  assert.ok(!directoryPage.items.some((user) => user.id === alice.profile.id), "Alice must not see herself in search");
+  console.log("PASS authenticated global username lookup and self-exclusion");
+  const aliceDisplayName = alice.profile.profile?.display_name ?? alice.username;
+  const bobDisplayName = bob.profile.profile?.display_name ?? bob.username;
   // Synapse's default rc_login.address refill is 0.003 requests/second.
   const reusableBob = await reusableSession(bob);
   if (!reusableBob) await new Promise((resolve) => setTimeout(resolve, 340_000));
@@ -492,33 +452,101 @@ try {
   await prepareCrossSigning(pageB, "bob");
 
   await pageA.getByRole("button", { name: "Start a new chat" }).click();
-  await pageA.getByPlaceholder("Search name or username").fill(bob.username);
+  await pageA.getByPlaceholder("Search username").fill(bob.username);
   const dialog = pageA.getByRole("dialog", { name: "Start a conversation" });
   try {
-    await dialog.getByRole("button", { name: new RegExp(bob.username) }).click({ timeout: 10_000 });
+    await dialog.getByRole("button", { name: "Add Contact" }).click({ timeout: 10_000 });
   } catch (cause) {
-    throw new Error(`Bob was unavailable in directory: ${await dialog.innerText()}`, { cause });
+    throw new Error(`Bob was unavailable in username search: ${await dialog.innerText()}`, { cause });
   }
-  await waitFor(() => new URL(pageA.url()).pathname.startsWith("/chat/"), "Alice room route");
-  const roomId = decodeURIComponent(new URL(pageA.url()).pathname.slice(6));
+  await dialog.getByRole("button", { name: "Request Sent" }).waitFor({
+    state: "visible",
+    timeout: 10_000,
+  });
+  const outgoingResponse = await fetch(`${apiUrl}/connections/requests/outgoing`, {
+    headers: { Authorization: `Bearer ${loginA.access_token}` },
+  });
+  assert.equal(outgoingResponse.status, 200);
+  const outgoingRequests = await outgoingResponse.json();
+  const request = outgoingRequests.find((item) => item.other_user.id === bob.profile.id);
+  assert.equal(request?.status, "pending");
+  const requestCard = pageB.locator(".connection-request-card").filter({
+    hasText: alice.username,
+  });
+  await requestCard.getByRole("button", { name: "Accept" }).waitFor({
+    state: "visible",
+    timeout: 45_000,
+  });
+  await requestCard.getByRole("button", { name: "Accept" }).click();
+  await waitFor(async () => {
+    const [aliceResponse, bobResponse] = await Promise.all([
+      fetch(`${apiUrl}/connections`, {
+        headers: { Authorization: `Bearer ${loginA.access_token}` },
+      }),
+      fetch(`${apiUrl}/connections`, {
+        headers: { Authorization: `Bearer ${loginB.access_token}` },
+      }),
+    ]);
+    if (!aliceResponse.ok || !bobResponse.ok) return false;
+    const [aliceConnections, bobConnections] = await Promise.all([
+      aliceResponse.json(),
+      bobResponse.json(),
+    ]);
+    return (
+      aliceConnections.some((item) => item.other_user.id === bob.profile.id) &&
+      bobConnections.some((item) => item.other_user.id === alice.profile.id)
+    );
+  }, "the accepted connection to appear for both users");
+  await dialog.getByRole("button", { name: "Close" }).click().catch(() => undefined);
+
+  let inviteRooms = [];
+  await waitFor(async () => {
+    const syncResponse = await fetch(
+      `${matrixUrl}/_matrix/client/v3/sync?timeout=0`,
+      { headers: { Authorization: `Bearer ${sessionB.access_token}` } },
+    );
+    if (!syncResponse.ok) return false;
+    const sync = await syncResponse.json();
+    inviteRooms = Object.entries(sync.rooms?.invite || {})
+      .filter(([, room]) =>
+        JSON.stringify(room).includes(sessionA.user_id),
+      )
+      .map(([invitedRoomId]) => invitedRoomId);
+    return inviteRooms.length > 0;
+  }, "the encrypted Matrix room invitation");
+  const roomId = inviteRooms[0];
   assert.ok(roomId.startsWith("!"));
+  const aliceContact = pageA.locator(".conversation-row").filter({
+    hasText: bobDisplayName,
+  });
+  await aliceContact.waitFor({ state: "visible", timeout: 30_000 });
+  await aliceContact.click();
+  await waitFor(
+    () => new URL(pageA.url()).pathname.startsWith("/chat/"),
+    "Alice room route",
+  );
+  assert.equal(decodeURIComponent(new URL(pageA.url()).pathname.slice(6)), roomId);
   try {
-    await pageB.locator(".conversation-row").first().waitFor({ timeout: 30_000 });
+    await pageB.locator(".conversation-row").filter({
+      hasText: aliceDisplayName,
+    }).waitFor({ timeout: 30_000 });
   } catch (cause) {
-    const syncResponse = await fetch(`${matrixUrl}/_matrix/client/v3/sync?timeout=0`, {
-      headers: { Authorization: `Bearer ${sessionB.access_token}` },
-    });
-    const sync = syncResponse.ok ? await syncResponse.json() : {};
     throw new Error(
       `Bob invite did not appear. Route: ${pageB.url()}. ` +
-      `Invite rooms in Synapse: ${Object.keys(sync.rooms?.invite || {}).join(",")}. ` +
+      `Invite rooms in Synapse: ${inviteRooms.join(",")}. ` +
       `Sidebar: ${await pageB.locator(".conversation-sidebar").innerText()}. ` +
       `Page errors: ${bobPageErrors.join(" | ")}`,
       { cause },
     );
   }
-  await pageB.locator(".conversation-row").first().click();
-  assert.equal(decodeURIComponent(new URL(pageB.url()).pathname.slice(6)), roomId);
+  const bobContact = pageB.locator(".conversation-row").filter({
+    hasText: aliceDisplayName,
+  });
+  await waitFor(async () => {
+    await bobContact.click();
+    await pageB.waitForTimeout(500);
+    return decodeURIComponent(new URL(pageB.url()).pathname.slice(6)) === roomId;
+  }, "Bob's synced room route");
   const acceptButton = pageB.getByRole("button", { name: "Accept invitation" });
   if (await acceptButton.count()) await acceptButton.click();
   await pageB.getByLabel("Write a message").waitFor({ state: "visible", timeout: 30_000 });

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { useMatrixContext } from "../context/MatrixContext";
 import type { Conversation } from "../types";
@@ -35,27 +35,41 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
     authenticationError,
     recentEvents,
   } = useMatrixContext();
+  const directRoomPromises = useRef(new Map<string, Promise<string>>());
 
   const createDirect = useCallback(
     async (_userId: string, _displayName: string, matrixUserId: string) => {
       if (!client) throw new Error("Sign in to start a conversation.");
-      const existing = client.getRooms().find((room) =>
-        (room.getMyMembership() === "join" || room.getMyMembership() === "invite") &&
-        room.hasEncryptionStateEvent() &&
-        room.getMembers().some((member) =>
-          member.userId === matrixUserId &&
-          (member.membership === "join" || member.membership === "invite"),
-        ) &&
-        room.getMembers().filter((member) =>
-          member.userId !== client.getUserId() &&
-          (member.membership === "join" || member.membership === "invite"),
-        ).length === 1,
-      );
-      if (existing) return existing.roomId;
-      return createEncryptedRoom(client, {
-        invitees: [matrixUserId],
-        isDirect: true,
-      });
+      const pending = directRoomPromises.current.get(matrixUserId);
+      if (pending) return pending;
+
+      const creation = (async () => {
+        const existing = client.getRooms().find((room) =>
+          (room.getMyMembership() === "join" || room.getMyMembership() === "invite") &&
+          room.hasEncryptionStateEvent() &&
+          room.getMembers().some((member) =>
+            member.userId === matrixUserId &&
+            (member.membership === "join" || member.membership === "invite"),
+          ) &&
+          room.getMembers().filter((member) =>
+            member.userId !== client.getUserId() &&
+            (member.membership === "join" || member.membership === "invite"),
+          ).length === 1,
+        );
+        if (existing) return existing.roomId;
+        return createEncryptedRoom(client, {
+          invitees: [matrixUserId],
+          isDirect: true,
+        });
+      })();
+      directRoomPromises.current.set(matrixUserId, creation);
+      try {
+        return await creation;
+      } finally {
+        if (directRoomPromises.current.get(matrixUserId) === creation) {
+          directRoomPromises.current.delete(matrixUserId);
+        }
+      }
     },
     [client],
   );

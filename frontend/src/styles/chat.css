@@ -135,6 +135,111 @@
   padding: 0 14px 12px;
 }
 
+.connection-requests {
+  max-height: 230px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  padding: 0 8px 10px;
+  border-bottom: 1px solid #edf1ee;
+}
+
+.connection-request-list {
+  display: grid;
+  max-height: 175px;
+  gap: 6px;
+  overflow-y: auto;
+  padding: 0 5px;
+}
+
+.connection-request-card {
+  padding: 8px;
+  border: 1px solid #e7eee9;
+  border-radius: 10px;
+  background: #fbfdfb;
+}
+
+.connection-request-person {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.connection-request-person > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.connection-request-person strong,
+.connection-request-person small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-request-person strong {
+  color: #36443b;
+  font-size: 10px;
+}
+
+.connection-request-person small {
+  color: #8f9b93;
+  font-size: 9px;
+}
+
+.connection-request-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.connection-request-actions button,
+.add-contact-button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid #ccebd5;
+  border-radius: 7px;
+  background: #effaf2;
+  color: #148248;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.connection-request-actions button {
+  flex: 1;
+}
+
+.connection-request-actions button.is-secondary {
+  border-color: #e5ebe7;
+  background: #ffffff;
+  color: #77847b;
+}
+
+.connection-request-actions button:disabled,
+.add-contact-button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.connection-request-state {
+  padding: 7px 10px;
+  color: #87948b;
+  font-size: 9px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.connection-request-state.is-error {
+  color: #a8453b;
+}
+
 .search-input {
   display: flex;
   min-width: 0;
@@ -735,6 +840,16 @@
   margin-top: 5px;
   padding: 0 14px;
   font-size: 11px;
+}
+
+.connection-required-note {
+  flex: 0 0 auto;
+  padding: 11px 18px;
+  border-top: 1px solid #edf1ee;
+  background: #fbf7f1;
+  color: #8a6b42;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .messages-scroll {
@@ -1804,12 +1919,13 @@
   cursor: pointer;
 }
 
-.directory-result:hover:not(:disabled) {
+.directory-result:hover {
   background: #f1f9f3;
 }
 
-.directory-result:disabled {
-  opacity: 0.55;
+.add-contact-button:hover:not(:disabled) {
+  border-color: #a9ddb9;
+  background: #e6f7eb;
 }
 
 .directory-result-copy {

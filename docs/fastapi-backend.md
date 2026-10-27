@@ -7,12 +7,12 @@ SQLAlchemy 2.x, Alembic, and PostgreSQL via Psycopg 3. The code is divided into
 versioned API routers, request/response schemas, services, repositories, core
 configuration/security, and a narrow HTTPX Matrix diagnostics client.
 
-FastAPI owns application accounts, profiles, organization-scoped directory
-visibility, application JWTs, refresh-session records, and configurable
+FastAPI owns application accounts, profiles, global username discovery,
+connection requests, application JWTs, refresh-session records, and configurable
 entitlements. Synapse remains authoritative for Matrix identities, devices,
-rooms, events, message history, receipts, typing, and media. The backend's
-Matrix client currently checks `/_matrix/client/versions`; it does not provision
-accounts or proxy Matrix traffic.
+rooms, events, message history, receipts, typing, and media. After app
+authentication, the backend exchanges a short-lived signed JWT for a Synapse
+session; it does not proxy Matrix traffic.
 
 ## Database
 
@@ -37,15 +37,17 @@ superuser, and creates/drops only the test schema there.
 
 | Table | Data and constraints |
 | --- | --- |
-| `organizations` | UUID, name, unique slug, and creation timestamp. |
-| `users` | UUID, case-insensitive unique email and username, Argon2id hash, active/email-verified flags, role, optional organization foreign key, and timestamps. Roles are constrained to `user` or `admin`. |
+| `users` | UUID, case-insensitive unique email and username, Argon2id hash, active/email-verified flags, role, and timestamps. Roles are constrained to `user` or `admin`. |
 | `profiles` | One-to-one user foreign key, display name, picture URL, bio, job title, department, organization label, and update timestamp. |
 | `subscriptions` | UUID, user, `free`/`pro`/`enterprise` plan, status, start/expiry, optional administrator actor, and timestamps. Database checks validate plan/status and expiry ordering. |
 | `refresh_tokens` | UUID, user, unique SHA-256 token hash, family ID, expiry/revocation timestamps, and optional self-reference to the replacing token. |
+| `user_connections` | UUID, requester and recipient users, pending/accepted/declined/blocked status, timestamps, and accepted timestamp. A database constraint prevents self-requests and duplicate or reverse-direction pairs. |
 
 The model and initial schema are in `backend/app/models/` and
-`backend/alembic/versions/0001_initial_schema.py`. Passwords and raw refresh
-tokens are not persisted.
+the Alembic history. Migration `0002_user_connections` adds connections and
+removes the obsolete organization table and user foreign key. The free-text
+`profiles.organization` label remains. Passwords and raw refresh tokens are not
+persisted.
 
 ## Authentication
 
@@ -79,7 +81,12 @@ All application routes are under `/api/v1`:
 | `POST /auth/logout` | Refresh cookie | Revoke the token family, optionally revoke the Matrix session, and clear cookie. |
 | `GET /auth/me` | App JWT | Return the authenticated user's account/profile. |
 | `GET /users/me`, `PATCH /users/me` | App JWT | Read or update the caller's email/username. |
-| `GET /users`, `GET /users/search`, `GET /users/{user_id}` | App JWT and directory entitlement | Paginated, organization-scoped user discovery. |
+| `GET /users/search` | App JWT and directory entitlement | Rate-limited, global, case-insensitive username search over active users; excludes the caller and returns public profile fields only. |
+| `GET /users/{user_id}` | App JWT and directory entitlement | Profile lookup subject to self/admin visibility. |
+| `POST /connections/requests` | App JWT and directory entitlement | Send a connection request; rejects self, duplicate, and reverse-direction requests. |
+| `GET /connections/requests/incoming`, `GET /connections/requests/outgoing` | App JWT | List the caller's pending incoming or outgoing requests. |
+| `POST /connections/{id}/accept`, `POST /connections/{id}/decline` | App JWT | Only the recipient may respond to a pending request. |
+| `GET /connections` | App JWT | List accepted contacts. |
 | `GET /profiles/{user_id}`, `PATCH /profiles/me` | App JWT and visibility rules | Read a visible profile or update the caller's profile. |
 | `GET /subscriptions/me`, `GET /subscriptions/plans` | App JWT for `me` | Read current placeholder plan and configured plan catalog. |
 | `GET /access/check?feature=...` | App JWT | Evaluate a configured feature entitlement; unknown features are denied. |
@@ -90,13 +97,13 @@ All application routes are under `/api/v1`:
 | `GET /health/synapse` under `/api/v1` | Public | Separate Synapse API diagnostic. |
 
 Directory search returns username and public profile fields only; it does not
-return email or authentication metadata. Users without an organization can
-discover only themselves. Account/profile updates operate only on the
-authenticated user. Administrative subscription writes require role `admin`.
+return email or authentication metadata. Account/profile updates operate only
+on the authenticated user. Administrative subscription writes require role
+`admin`.
 
 The Free/Pro/Enterprise labels are illustrative access tiers, not paid plans.
 `APP_PLAN_ENTITLEMENTS` is configurable, and business owners must approve
-actual plan rules, organization visibility, and administrator assignment
+actual plan rules and administrator assignment
 before production use.
 
 ## Example Requests

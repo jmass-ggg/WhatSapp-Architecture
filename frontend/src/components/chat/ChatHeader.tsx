@@ -46,7 +46,12 @@ export function ChatHeader({
     );
   }
 
-  const status = conversation.isEncrypted
+  const status =
+    mode === "live" &&
+    !conversation.isGroup &&
+    conversation.connectionAllowed !== true
+      ? "Connection required · sending blocked"
+      : conversation.isEncrypted
     ? cryptoStatus === "ready"
       ? "End-to-end encrypted · Rust crypto"
       : "Encrypted room · crypto unavailable"

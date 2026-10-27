@@ -5,7 +5,7 @@
 | Database | Owner/service | Data boundary |
 | --- | --- | --- |
 | `synapse` | Synapse PostgreSQL container | Matrix users/devices, rooms, events, state, sync data, and homeserver metadata. |
-| `chat_app` | FastAPI PostgreSQL container | Application accounts, profiles, organization records, subscriptions, and hashed refresh sessions. |
+| `chat_app` | FastAPI PostgreSQL container | Application accounts, profiles, subscriptions, hashed refresh sessions, and user connection requests. |
 | `chat_app_test` | FastAPI test suite | Isolated test fixtures only; tests may create and drop its tables. |
 
 These are separate PostgreSQL containers, Compose networks, volumes, and

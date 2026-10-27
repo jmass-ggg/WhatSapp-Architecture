@@ -16,7 +16,8 @@ import { useAuth } from "../context/AuthContext";
 import { useMatrixContext } from "../context/MatrixContext";
 import { useMatrixRooms } from "../hooks/useMatrixRooms";
 import { sendEncryptedTextMessage } from "../services/matrix/encryption";
-import type { Conversation, DirectoryUser, Message } from "../types";
+import { matrixUserIdForAppUserId } from "../services/matrix/identity";
+import type { Conversation, DirectoryUser, Message, UserConnection } from "../types";
 import { getDemoConversations } from "../utils/demoData";
 
 type ToastState = {
@@ -32,6 +33,31 @@ function initialsFor(name: string): string {
     .map((part) => part[0])
     .join("")
     .toUpperCase();
+}
+
+function conversationForContact(connection: UserConnection): Conversation {
+  const contact = connection.other_user;
+  const name = contact.profile?.display_name || contact.username;
+  return {
+    id: `contact:${contact.id}`,
+    contactUserId: contact.id,
+    connectionUserId: contact.id,
+    connectionAllowed: true,
+    name,
+    username: contact.username,
+    matrixUserId: matrixUserIdForAppUserId(contact.id),
+    initials: initialsFor(name),
+    avatarUrl: contact.profile?.profile_picture_url,
+    accent: Math.abs(contact.id.length * 13) % 6,
+    lastMessage: "Start an encrypted conversation",
+    updatedAt: new Date(0),
+    unreadCount: 0,
+    messages: [],
+    bio: contact.profile?.bio ?? "LumaChat contact",
+    isDemo: false,
+    isEncrypted: false,
+    isGroup: false,
+  };
 }
 
 export function ChatPage() {
@@ -50,13 +76,186 @@ export function ChatPage() {
   const [wallpaperIds, setWallpaperIds] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<ToastState | null>(null);
   const [joiningRoom, setJoiningRoom] = useState(false);
+  const [connections, setConnections] = useState<UserConnection[]>([]);
+  const [incomingRequests, setIncomingRequests] = useState<UserConnection[]>([]);
+  const [outgoingRequests, setOutgoingRequests] = useState<UserConnection[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
+  const [startingContactId, setStartingContactId] = useState<string | null>(null);
+  const provisionedConnectionIds = useRef(new Set<string>());
   const lastReadReceipt = useRef("");
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
 
   const matrix = useMatrixRooms();
   const matrixContext = useMatrixContext();
-  const conversations =
-    mode === "demo" ? demoConversations : mode === "live" ? matrix.rooms : [];
+  const dismissToast = useCallback(() => setToast(null), []);
+  const notify = useCallback((message: string, kind: ToastState["kind"] = "info") => {
+    setToast({ message, kind });
+  }, []);
+
+  const refreshConnections = useCallback(
+    async (showLoading = false): Promise<boolean> => {
+      if (mode !== "live" || !user) {
+        setConnections([]);
+        setIncomingRequests([]);
+        setOutgoingRequests([]);
+        setConnectionError(null);
+        return true;
+      }
+      if (showLoading) setRequestsLoading(true);
+      try {
+        const [accepted, incoming, outgoing] = await Promise.all([
+          api.request<UserConnection[]>("/connections"),
+          api.request<UserConnection[]>("/connections/requests/incoming"),
+          api.request<UserConnection[]>("/connections/requests/outgoing"),
+        ]);
+        setConnections(accepted);
+        setIncomingRequests(incoming);
+        setOutgoingRequests(outgoing);
+        setConnectionError(null);
+        return true;
+      } catch (cause) {
+        setConnectionError(
+          cause instanceof Error
+            ? cause.message
+            : "Connection information is unavailable right now.",
+        );
+        return false;
+      } finally {
+        if (showLoading) setRequestsLoading(false);
+      }
+    },
+    [api, mode, user],
+  );
+
+  useEffect(() => {
+    void refreshConnections(true);
+  }, [refreshConnections]);
+
+  useEffect(() => {
+    if (mode !== "live" || !user) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshConnections();
+    };
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    const timer = window.setInterval(refreshWhenVisible, 15_000);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.clearInterval(timer);
+    };
+  }, [mode, refreshConnections, user]);
+
+  const connectionsByMatrixUserId = useMemo(
+    () =>
+      new Map(
+        connections.map((connection) => [
+          matrixUserIdForAppUserId(connection.other_user.id),
+          connection,
+        ]),
+      ),
+    [connections],
+  );
+
+  const conversations = useMemo(() => {
+    if (mode === "demo") return demoConversations;
+    if (mode !== "live") return [];
+
+    const matrixConversations = matrix.rooms.map((room) => {
+      if (room.isGroup) return { ...room, connectionAllowed: true };
+      const connection = room.matrixUserId
+        ? connectionsByMatrixUserId.get(room.matrixUserId)
+        : undefined;
+      const contact = connection?.other_user;
+      return {
+        ...room,
+        contactUserId: contact?.id,
+        connectionUserId: contact?.id,
+        connectionAllowed: Boolean(connection),
+        name: contact?.profile?.display_name || contact?.username || room.name,
+        username: contact?.username || room.username,
+        avatarUrl: contact?.profile?.profile_picture_url ?? room.avatarUrl,
+      };
+    });
+    const roomMatrixUserIds = new Set(
+      matrixConversations
+        .filter((room) => !room.isGroup && room.matrixUserId)
+        .map((room) => room.matrixUserId as string),
+    );
+    const contactsWithoutRooms = connections
+      .filter(
+        (connection) =>
+          !roomMatrixUserIds.has(
+            matrixUserIdForAppUserId(connection.other_user.id),
+          ),
+      )
+      .map(conversationForContact);
+
+    return [...matrixConversations, ...contactsWithoutRooms].sort(
+      (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
+    );
+  }, [connections, connectionsByMatrixUserId, demoConversations, matrix.rooms, mode]);
+
+  useEffect(() => {
+    if (
+      mode !== "live" ||
+      !user ||
+      !matrix.initialSyncComplete ||
+      matrix.cryptoStatus !== "ready"
+    ) {
+      return;
+    }
+    for (const connection of connections) {
+      if (
+        connection.requester_id !== user.id ||
+        provisionedConnectionIds.current.has(connection.id)
+      ) {
+        continue;
+      }
+      const matrixUserId = matrixUserIdForAppUserId(connection.other_user.id);
+      const existingRoom = matrix.rooms.find(
+        (room) =>
+          !room.isGroup &&
+          room.isEncrypted &&
+          room.matrixUserId === matrixUserId,
+      );
+      if (existingRoom) {
+        provisionedConnectionIds.current.add(connection.id);
+        continue;
+      }
+
+      provisionedConnectionIds.current.add(connection.id);
+      const name =
+        connection.other_user.profile?.display_name ||
+        connection.other_user.username;
+      void matrix
+        .createDirect(connection.other_user.id, name, matrixUserId)
+        .then(() => {
+          notify(`Encrypted room ready for @${connection.other_user.username}.`, "success");
+        })
+        .catch((cause: unknown) => {
+          provisionedConnectionIds.current.delete(connection.id);
+          notify(
+            cause instanceof Error
+              ? cause.message
+              : "The encrypted room could not be created.",
+            "error",
+          );
+        });
+    }
+  }, [
+    connections,
+    matrix.createDirect,
+    matrix.cryptoStatus,
+    matrix.initialSyncComplete,
+    matrix.rooms,
+    mode,
+    notify,
+    user,
+  ]);
+
   const selectedConversation =
     (conversationId
       ? conversations.find((conversation) => conversation.id === conversationId)
@@ -68,11 +267,23 @@ export function ChatPage() {
     ? matrixContext.client?.getRoom(selectedId)
     : null;
   const isInvited = selectedRoom?.getMyMembership() === "invite";
-
-  const dismissToast = useCallback(() => setToast(null), []);
-  const notify = useCallback((message: string, kind: ToastState["kind"] = "info") => {
-    setToast({ message, kind });
-  }, []);
+  const isDirectConversation = Boolean(
+    selectedConversation && !selectedConversation.isGroup,
+  );
+  const directPeerJoined = Boolean(
+    selectedConversation?.matrixUserId &&
+      selectedRoom?.getMembers().some(
+        (member) =>
+          member.userId === selectedConversation.matrixUserId &&
+          member.membership === "join",
+      ),
+  );
+  const canShowComposer = Boolean(
+    selectedConversation &&
+      (mode !== "live" ||
+        selectedConversation.isGroup ||
+        selectedConversation.connectionAllowed === true),
+  );
 
   useEffect(() => {
     if (conversationId && conversations.length > 0 && !selectedConversation && mode === "demo") {
@@ -86,8 +297,128 @@ export function ChatPage() {
     selectedConversation,
   ]);
 
+  const sendConnectionRequest = useCallback(
+    async (directoryUser: DirectoryUser) => {
+      await api.request<UserConnection>("/connections/requests", {
+        method: "POST",
+        body: JSON.stringify({ recipient_id: directoryUser.id }),
+      });
+      await refreshConnections();
+      notify(`Connection request sent to @${directoryUser.username}.`, "success");
+    },
+    [api, notify, refreshConnections],
+  );
+
+  const respondToConnectionRequest = useCallback(
+    async (request: UserConnection, action: "accept" | "decline") => {
+      setRespondingRequestId(request.id);
+      try {
+        await api.request<UserConnection>(
+          `/connections/${encodeURIComponent(request.id)}/${action}`,
+          { method: "POST" },
+        );
+        await refreshConnections();
+        notify(
+          action === "accept"
+            ? `You are now connected with @${request.other_user.username}.`
+            : `Request from @${request.other_user.username} declined.`,
+          "success",
+        );
+      } catch (cause) {
+        notify(
+          cause instanceof Error
+            ? cause.message
+            : "The connection request could not be updated.",
+          "error",
+        );
+      } finally {
+        setRespondingRequestId(null);
+      }
+    },
+    [api, notify, refreshConnections],
+  );
+
+  const verifyAcceptedContact = useCallback(
+    async (contactUserId: string): Promise<UserConnection> => {
+      const acceptedConnections = await api.request<UserConnection[]>("/connections");
+      const connection = acceptedConnections.find(
+        (item) => item.other_user.id === contactUserId,
+      );
+      if (!connection) {
+        void refreshConnections();
+        throw new Error("Accept a connection request before starting or sending a direct chat.");
+      }
+      return connection;
+    },
+    [api, refreshConnections],
+  );
+
+  const startAcceptedConversation = useCallback(
+    async (conversation: Conversation) => {
+      const contactUserId = conversation.contactUserId;
+      if (!contactUserId || startingContactId) return;
+      setStartingContactId(contactUserId);
+      try {
+        if (!matrix.initialSyncComplete) {
+          throw new Error("Wait for Matrix to finish syncing before starting a conversation.");
+        }
+        const connection = await verifyAcceptedContact(contactUserId);
+        const matrixUserId = matrixUserIdForAppUserId(contactUserId);
+        const existingRoom = matrix.rooms.find(
+          (room) =>
+            !room.isGroup &&
+            room.isEncrypted &&
+            room.matrixUserId === matrixUserId,
+        );
+        if (connection.requester_id !== user?.id) {
+          if (!existingRoom) {
+            throw new Error("The person who sent the request is preparing the encrypted room.");
+          }
+          navigate(`/chat/${encodeURIComponent(existingRoom.roomId ?? existingRoom.id)}`);
+          return;
+        }
+        if (existingRoom) {
+          navigate(`/chat/${encodeURIComponent(existingRoom.roomId ?? existingRoom.id)}`);
+          return;
+        }
+        const roomId = await matrix.createDirect(
+          contactUserId,
+          conversation.name,
+          matrixUserId,
+        );
+        navigate(`/chat/${encodeURIComponent(roomId)}`);
+        notify(`Encrypted conversation ready with ${conversation.name}.`, "success");
+      } catch (cause) {
+        notify(
+          cause instanceof Error
+            ? cause.message
+            : "The encrypted conversation could not be started.",
+          "error",
+        );
+      } finally {
+        setStartingContactId(null);
+      }
+    },
+    [
+      api,
+      matrix.createDirect,
+      matrix.initialSyncComplete,
+      matrix.rooms,
+      navigate,
+      notify,
+      startingContactId,
+      user,
+      verifyAcceptedContact,
+    ],
+  );
+
   const selectConversation = useCallback(
     (conversation: Conversation) => {
+      if (mode === "live" && conversation.contactUserId) {
+        void startAcceptedConversation(conversation);
+        return;
+      }
+      if (startingContactId) return;
       setMessageSearch("");
       setSearchOpen(false);
       setInfoOpen(
@@ -96,7 +427,7 @@ export function ChatPage() {
       );
       navigate(`/chat/${encodeURIComponent(conversation.id)}`);
     },
-    [navigate],
+    [mode, navigate, startAcceptedConversation, startingContactId],
   );
 
   useEffect(() => {
@@ -107,6 +438,8 @@ export function ChatPage() {
 
   useEffect(() => {
     if (mode !== "live" || !selectedConversation || isInvited ||
+      (!selectedConversation.isGroup &&
+        selectedConversation.connectionAllowed !== true) ||
       !pageVisible ||
       (!conversationId && window.matchMedia("(max-width: 767px)").matches)) return;
     const client = matrixContext.client;
@@ -125,19 +458,35 @@ export function ChatPage() {
         if (lastReadReceipt.current === receiptKey) lastReadReceipt.current = "";
       });
     }
-  }, [conversationId, isInvited, matrixContext.client, mode, pageVisible, selectedConversation]);
+  }, [
+    conversationId,
+    isInvited,
+    matrixContext.client,
+    mode,
+    pageVisible,
+    selectedConversation,
+  ]);
 
   const acceptInvitation = useCallback(async () => {
-    if (!matrixContext.client || !selectedId) return;
+    if (!matrixContext.client || !selectedId || !selectedConversation) return;
     setJoiningRoom(true);
     try {
+      if (!selectedConversation.isGroup) {
+        if (
+          !selectedConversation.connectionAllowed ||
+          !selectedConversation.connectionUserId
+        ) {
+          throw new Error("This direct room is unavailable until the connection is accepted.");
+        }
+        await verifyAcceptedContact(selectedConversation.connectionUserId);
+      }
       await matrixContext.client.joinRoom(selectedId);
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : "Could not join the conversation.", "error");
     } finally {
       setJoiningRoom(false);
     }
-  }, [matrixContext.client, notify, selectedId]);
+  }, [matrixContext.client, notify, selectedConversation, selectedId, verifyAcceptedContact]);
 
   const sendMessage = useCallback(
     async (text: string, file?: File) => {
@@ -154,17 +503,45 @@ export function ChatPage() {
             "This room is not encrypted. The message was not sent.",
           );
         }
+        if (!selectedConversation.isGroup) {
+          if (
+            !selectedConversation.connectionAllowed ||
+            !selectedConversation.connectionUserId
+          ) {
+            throw new Error(
+              "Accept a connection request before sending a direct message.",
+            );
+          }
+          await verifyAcceptedContact(selectedConversation.connectionUserId);
+        }
         if (
           matrixContext.cryptoStatus !== "ready" ||
-          !matrixContext.client
+          !matrixContext.client ||
+          matrixContext.crossSigningReady !== true
         ) {
           throw new Error(
-            "Matrix Rust crypto is unavailable. The message was not sent.",
+            "Matrix encryption and cross-signing must be ready before sending.",
           );
+        }
+        const roomId = selectedConversation.roomId ?? selectedConversation.id;
+        const room = matrixContext.client.getRoom(roomId);
+        if (!room || room.getMyMembership() !== "join") {
+          throw new Error("Join the encrypted room before sending a message.");
+        }
+        if (
+          !selectedConversation.isGroup &&
+          (!selectedConversation.matrixUserId ||
+            !room.getMembers().some(
+              (member) =>
+                member.userId === selectedConversation.matrixUserId &&
+                member.membership === "join",
+            ))
+        ) {
+          throw new Error("Both users must join the encrypted room before messaging.");
         }
         await sendEncryptedTextMessage(
           matrixContext.client,
-          selectedConversation.roomId ?? selectedConversation.id,
+          roomId,
           text,
         );
         return;
@@ -212,41 +589,11 @@ export function ChatPage() {
     [
       matrixContext.client,
       matrixContext.cryptoStatus,
+      matrixContext.crossSigningReady,
       mode,
       selectedConversation,
+      verifyAcceptedContact,
     ],
-  );
-
-  const handleNewDirect = useCallback(
-    async (directoryUser: DirectoryUser, matrixUserId: string) => {
-      const displayName =
-        directoryUser.profile.display_name || directoryUser.username;
-      const roomId = await matrix.createDirect(
-        directoryUser.id,
-        displayName,
-        matrixUserId,
-      );
-      setNewChatOpen(false);
-      selectConversation({
-        id: roomId,
-        roomId,
-        name: displayName,
-        username: directoryUser.username,
-        matrixUserId,
-        initials: initialsFor(displayName),
-        avatarUrl: directoryUser.profile.profile_picture_url,
-        accent: Math.abs(roomId.length * 13) % 6,
-        lastMessage: "Conversation started",
-        updatedAt: new Date(),
-        unreadCount: 0,
-        messages: [],
-        bio: "Matrix conversation",
-        isDemo: false,
-        isEncrypted: true,
-        isGroup: false,
-      });
-    },
-    [matrix, selectConversation],
   );
 
   const handleSignOut = useCallback(() => {
@@ -337,7 +684,17 @@ export function ChatPage() {
           matrixStatus={matrix.status}
           initialSyncComplete={matrix.initialSyncComplete}
           authenticationError={matrix.authenticationError}
+          incomingRequests={incomingRequests}
+          requestsLoading={requestsLoading}
+          requestError={connectionError}
+          respondingRequestId={respondingRequestId}
           onSelect={selectConversation}
+          onAcceptRequest={(request) =>
+            void respondToConnectionRequest(request, "accept")
+          }
+          onDeclineRequest={(request) =>
+            void respondToConnectionRequest(request, "decline")
+          }
           onNewChat={() => setNewChatOpen(true)}
           onSignOut={handleSignOut}
           onSettings={() =>
@@ -380,10 +737,17 @@ export function ChatPage() {
 
           {isInvited && (
             <div className="mode-banner" role="status">
-              <span>Invitation to this conversation</span>
-              <button type="button" className="primary-button" onClick={() => void acceptInvitation()} disabled={joiningRoom}>
-                {joiningRoom ? "Joining…" : "Accept invitation"}
-              </button>
+              {selectedConversation?.isGroup ||
+              selectedConversation?.connectionAllowed === true ? (
+                <>
+                  <span>Invitation to this conversation</span>
+                  <button type="button" className="primary-button" onClick={() => void acceptInvitation()} disabled={joiningRoom}>
+                    {joiningRoom ? "Joining…" : "Accept invitation"}
+                  </button>
+                </>
+              ) : (
+                <span>Accept a connection request before joining this direct room.</span>
+              )}
             </div>
           )}
 
@@ -406,7 +770,7 @@ export function ChatPage() {
             conversations.length === 0 && (
               <div className="no-rooms-hint">
                 <strong>No conversations yet</strong>
-                <span>Start a chat with someone in your LumaChat directory.</span>
+                <span>Search for a username and send a connection request.</span>
                 <button type="button" className="primary-button" onClick={() => setNewChatOpen(true)}>
                   Start a conversation
                 </button>
@@ -421,13 +785,22 @@ export function ChatPage() {
             conversationRouteId={conversationId}
           />
 
-          {selectedConversation && (
+          {selectedConversation && mode === "live" &&
+            isDirectConversation && !selectedConversation.connectionAllowed && (
+              <div className="connection-required-note" role="status">
+                This direct conversation is unavailable until you accept a connection.
+              </div>
+            )}
+
+          {selectedConversation && canShowComposer && (
             <MessageComposer
               disabled={
                 mode === "live" &&
                 (isInvited || !selectedConversation.isEncrypted ||
                   matrix.cryptoStatus !== "ready" ||
-                  matrixContext.crossSigningReady !== true)
+                  matrixContext.crossSigningReady !== true ||
+                  selectedRoom?.getMyMembership() !== "join" ||
+                  (isDirectConversation && !directPeerJoined))
               }
               attachmentsDisabled={mode === "live"}
               busy={false}
@@ -437,6 +810,8 @@ export function ChatPage() {
                     ? "Encryption is not ready"
                     : matrixContext.crossSigningReady !== true
                       ? "Set up cross-signing to send"
+                      : isDirectConversation && !directPeerJoined
+                        ? "Waiting for contact to join"
                       : "Write an end-to-end encrypted message…"
                   : mode === "demo"
                   ? "Write a demo message…"
@@ -449,6 +824,8 @@ export function ChatPage() {
                       ? "Encrypted sending is unavailable until Rust crypto is ready."
                       : matrixContext.crossSigningReady !== true
                         ? "Set up secure recovery and cross-signing in Encryption and devices before sending."
+                        : isDirectConversation && !directPeerJoined
+                          ? "Both users must join the encrypted room before messaging."
                         : "Messages are encrypted on this device before they reach Synapse."
                     : "This existing room is plaintext. Create a new encrypted room to send messages."
                   : undefined
@@ -492,12 +869,15 @@ export function ChatPage() {
         api={api}
         currentUserId={user.id}
         conversations={conversations}
+        connections={connections}
+        incomingRequests={incomingRequests}
+        outgoingRequests={outgoingRequests}
         onClose={() => setNewChatOpen(false)}
         onSelectDemo={(conversation) => {
           setNewChatOpen(false);
           selectConversation(conversation);
         }}
-        onCreateDirect={handleNewDirect}
+        onSendRequest={sendConnectionRequest}
       />
       {securityOpen && (
         <MatrixSecurityDialog
