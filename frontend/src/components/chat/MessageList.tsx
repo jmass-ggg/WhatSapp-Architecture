@@ -101,21 +101,12 @@ export function MessageList({
           Sample messages · sent messages stay in this preview
         </div>
       )}
-      {conversation.isEncrypted && (
-        <div className="encrypted-room-warning" role="alert">
-          <strong>This room is end-to-end encrypted.</strong>
-          <span>
-            This prototype does not include Matrix decryption, so messages in
-            this room cannot be displayed or sent safely here.
-          </span>
-        </div>
-      )}
       {searchOpen && term && (
         <div className="search-result-note" role="status">
           {messages.length} {messages.length === 1 ? "message" : "messages"} found in loaded history
         </div>
       )}
-      {messages.length === 0 && conversation.isEncrypted ? null : messages.length === 0 ? (
+      {messages.length === 0 ? (
         <div className="messages-empty">
           {term ? "No loaded messages match your search." : "No messages yet. Send a hello."}
         </div>

@@ -6,13 +6,16 @@ import { ContactInfoPanel } from "../components/chat/ContactInfoPanel";
 import { ConversationSidebar } from "../components/chat/ConversationSidebar";
 import { ChatHeader } from "../components/chat/ChatHeader";
 import { MatrixConnectionStatus } from "../components/MatrixConnectionStatus";
+import { MatrixSecurityDialog } from "../components/MatrixSecurityDialog";
 import { MessageComposer } from "../components/chat/MessageComposer";
 import { MessageList } from "../components/chat/MessageList";
 import { NewConversationDialog } from "../components/chat/NewConversationDialog";
 import { SearchInput } from "../components/SearchInput";
 import { Toast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
+import { useMatrixContext } from "../context/MatrixContext";
 import { useMatrixRooms } from "../hooks/useMatrixRooms";
+import { sendEncryptedTextMessage } from "../services/matrix/encryption";
 import type { Conversation, DirectoryUser, Message } from "../types";
 import { getDemoConversations } from "../utils/demoData";
 
@@ -37,6 +40,7 @@ export function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const [demoConversations, setDemoConversations] = useState(getDemoConversations);
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [securityOpen, setSecurityOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(min-width: 1180px)").matches,
   );
@@ -47,6 +51,7 @@ export function ChatPage() {
   const [toast, setToast] = useState<ToastState | null>(null);
 
   const matrix = useMatrixRooms();
+  const matrixContext = useMatrixContext();
   const conversations =
     mode === "demo" ? demoConversations : mode === "live" ? matrix.rooms : [];
   const selectedConversation =
@@ -100,8 +105,34 @@ export function ChatPage() {
     async (text: string, file?: File) => {
       if (!selectedConversation) return;
 
+      if (mode === "live") {
+        if (file) {
+          throw new Error(
+            "Encrypted file attachments are not implemented. The file was not sent.",
+          );
+        }
+        if (!selectedConversation.isEncrypted) {
+          throw new Error(
+            "This room is not encrypted. The message was not sent.",
+          );
+        }
+        if (
+          matrixContext.cryptoStatus !== "ready" ||
+          !matrixContext.client
+        ) {
+          throw new Error(
+            "Matrix Rust crypto is unavailable. The message was not sent.",
+          );
+        }
+        await sendEncryptedTextMessage(
+          matrixContext.client,
+          selectedConversation.roomId ?? selectedConversation.id,
+          text,
+        );
+        return;
+      }
       if (mode !== "demo") {
-        throw new Error("Live Matrix message sending is not enabled yet.");
+        throw new Error("Message sending is unavailable.");
       }
 
       const sentAt = new Date();
@@ -140,7 +171,12 @@ export function ChatPage() {
         ),
       );
     },
-    [mode, selectedConversation],
+    [
+      matrixContext.client,
+      matrixContext.cryptoStatus,
+      mode,
+      selectedConversation,
+    ],
   );
 
   const handleNewDirect = useCallback(
@@ -168,6 +204,8 @@ export function ChatPage() {
         messages: [],
         bio: "Matrix conversation",
         isDemo: false,
+        isEncrypted: true,
+        isGroup: false,
       });
     },
     [matrix, selectConversation],
@@ -265,7 +303,7 @@ export function ChatPage() {
           onNewChat={() => setNewChatOpen(true)}
           onSignOut={handleSignOut}
           onSettings={() =>
-            notify("Preferences are a local preview and are not saved yet.", "info")
+            setSecurityOpen(true)
           }
         />
 
@@ -274,6 +312,7 @@ export function ChatPage() {
             conversation={selectedConversation}
             mode={mode}
             matrixSession={matrixSession}
+            cryptoStatus={matrix.cryptoStatus}
             searchOpen={searchOpen}
             onBack={() => navigate("/chat")}
             onSearch={() => {
@@ -337,18 +376,27 @@ export function ChatPage() {
 
           {selectedConversation && (
             <MessageComposer
-              disabled={selectedConversation.isEncrypted || mode === "live"}
+              disabled={
+                mode === "live" &&
+                (!selectedConversation.isEncrypted ||
+                  matrix.cryptoStatus !== "ready")
+              }
+              attachmentsDisabled={mode === "live"}
               busy={false}
               placeholder={
                 selectedConversation.isEncrypted
-                  ? "Encrypted messaging is not supported in this client"
+                  ? matrix.cryptoStatus === "ready"
+                    ? "Write an end-to-end encrypted message…"
+                    : "Encryption is not ready"
                   : mode === "demo"
                   ? "Write a demo message…"
-                  : "Matrix message sending is not enabled yet"
+                  : "This room is not encrypted"
               }
               hint={
                 mode === "live"
-                  ? "Live room events synchronize here; message sending is deferred to a later step."
+                  ? selectedConversation.isEncrypted
+                    ? "Messages are encrypted on this device before they reach Synapse."
+                    : "This existing room is plaintext. Create a new encrypted room to send messages."
                   : undefined
               }
               onSend={sendMessage}
@@ -397,6 +445,23 @@ export function ChatPage() {
         }}
         onCreateDirect={handleNewDirect}
       />
+      {securityOpen && (
+        <MatrixSecurityDialog
+          manager={matrixContext.manager}
+          snapshot={matrixContext}
+          peerUserId={
+            selectedConversation && !selectedConversation.isGroup
+              ? selectedConversation.matrixUserId
+              : undefined
+          }
+          roomId={
+            selectedConversation && !selectedConversation.isGroup
+              ? selectedConversation.roomId ?? selectedConversation.id
+              : undefined
+          }
+          onClose={() => setSecurityOpen(false)}
+        />
+      )}
       {toast && (
         <Toast message={toast.message} kind={toast.kind} onClose={dismissToast} />
       )}

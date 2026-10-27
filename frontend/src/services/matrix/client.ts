@@ -1,4 +1,5 @@
 import type { IMatrixClientCreateOpts, MatrixClient } from "matrix-js-sdk";
+import type { CryptoCallbacks } from "matrix-js-sdk/lib/crypto-api/index.js";
 
 import type { MatrixSession } from "../../types";
 
@@ -16,6 +17,15 @@ export const MATRIX_SERVER_NAME =
 export type MatrixClientFactory = (
   options: IMatrixClientCreateOpts,
 ) => MatrixClient;
+
+const silentSdkLogger = {
+  trace: () => undefined,
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  getChild: () => silentSdkLogger,
+};
 
 export type MatrixSessionErrorCode =
   | "invalid_session"
@@ -90,6 +100,7 @@ export function createAuthenticatedMatrixClient(
   session: MatrixSession | null | undefined,
   expectedUserId: string,
   factory?: MatrixClientFactory,
+  cryptoCallbacks?: CryptoCallbacks,
 ): Promise<MatrixClient> {
   validateMatrixSession(session, expectedUserId);
   const baseUrl = getMatrixHomeserverUrl();
@@ -100,9 +111,14 @@ export function createAuthenticatedMatrixClient(
       accessToken: session.access_token,
       userId: session.user_id,
       deviceId: session.device_id,
-      // Keep the SDK's sync cache in memory. In particular, do not persist the
-      // Matrix access token or share a cache between accounts.
+      // Keep sync responses in memory. Rust crypto uses its separately
+      // namespaced IndexedDB store, keyed by the verified user and device.
       store: new sdk.MemoryStore(),
+      // Matrix SDK debug logs can include device key material and event
+      // metadata. Surface sanitized state in the UI instead of logging SDK data.
+      logger: silentSdkLogger,
+      verificationMethods: ["m.sas.v1"],
+      ...(cryptoCallbacks ? { cryptoCallbacks } : {}),
     };
     return factory ? factory(options) : sdk.createClient(options);
   });

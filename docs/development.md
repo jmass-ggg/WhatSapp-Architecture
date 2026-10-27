@@ -63,12 +63,17 @@ suite at `chat_app` or Synapse's database.
 
 ## Other Verification Layers
 
-- Frontend production builds and browser smoke checks cover the current UI.
-- Future integration/E2E tests should use isolated accounts and verify login,
-  room activity, upload, and encryption UX.
+- Frontend type checks, unit tests, production builds, and local browser
+  integration tests cover authentication, Matrix sync, encrypted text
+  exchange, device verification, key recovery, and offline catch-up.
+- Keep live-test accounts and rooms synthetic and use only a disposable local
+  API/Synapse environment. Encrypted media and production capacity remain
+  unverified.
 - Performance scenarios are planned for 50, 100, and 500 simulated users,
   including latency, throughput, errors, CPU, and memory.
 
-No E2EE, production capacity, or payment behavior is claimed as verified.
+No production security audit, capacity guarantee, or payment behavior is
+claimed as verified. Local E2EE verification evidence is documented in
+[End-to-end encryption](end-to-end-encryption.md).
 Benchmark artifacts are generated locally under the ignored
 `scripts/benchmark/reports/` directory.

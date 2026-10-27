@@ -3,8 +3,8 @@
 Development workspace for a Matrix Synapse, FastAPI, React, and PostgreSQL
 chat application. It includes a responsive React interface, FastAPI
 identity/profile and access-control APIs, unified app-password-to-Matrix
-login, and a browser Matrix SDK client for authenticated room sync and live
-event rendering. Live message sending is deferred to a later stage.
+login, and a browser Matrix SDK client for authenticated room sync, encrypted
+text exchange, device verification, and encrypted-history recovery.
 
 ## Architecture and Boundaries
 
@@ -12,6 +12,7 @@ event rendering. Live message sending is deferred to a later stage.
 - [System architecture](docs/architecture.md)
 - [API boundaries](docs/api-boundaries.md)
 - [Authentication and token boundaries](docs/authentication.md)
+- [Matrix end-to-end encryption](docs/end-to-end-encryption.md)
 - [Database ownership](docs/database-design.md)
 - [FastAPI backend guide](docs/fastapi-backend.md)
 - [Local Synapse setup](docs/synapse-setup.md)
@@ -59,9 +60,11 @@ FastAPI and `http://localhost:8008` for Synapse by default; override them with
 `VITE_API_URL`, `VITE_MATRIX_HOMESERVER_URL`, and `VITE_MATRIX_SERVER_NAME` in
 `frontend/.env`. A clearly labeled demo preview is available from the login
 page. Live login requires the backend and Synapse services to be running.
-Matrix synchronization uses the pinned official `matrix-js-sdk`; see the
-[Matrix frontend integration guide](docs/matrix-frontend-integration.md) for
-the session lifecycle and live-test procedure.
+The pinned official `matrix-js-sdk` initializes Rust crypto before sync.
+New rooms and live text messages use Matrix E2EE; plaintext rooms fail closed.
+See the [Matrix frontend integration guide](docs/matrix-frontend-integration.md)
+and [E2EE guide](docs/end-to-end-encryption.md) for device, recovery, and test
+details.
 
 The API is loopback-published on port 8000. Use `http://localhost:8000` from a
 browser with the frontend at `http://localhost:5173`, keeping the hostname

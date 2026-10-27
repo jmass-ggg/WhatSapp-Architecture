@@ -3,11 +3,13 @@ import { useCallback } from "react";
 import { useMatrixContext } from "../context/MatrixContext";
 import type { Conversation } from "../types";
 import type { MatrixConnectionStatus, MatrixEventSummary } from "../services/matrix/session";
+import { createEncryptedRoom } from "../services/matrix/encryption";
 
 export interface UseMatrixRoomsResult {
   rooms: Conversation[];
   status: MatrixConnectionStatus;
   initialSyncComplete: boolean;
+  cryptoStatus: ReturnType<typeof useMatrixContext>["cryptoStatus"];
   error: string | null;
   authenticationError: boolean;
   recentEvents: MatrixEventSummary[];
@@ -15,6 +17,10 @@ export interface UseMatrixRoomsResult {
     userId: string,
     displayName: string,
     matrixUserId: string,
+  ) => Promise<string>;
+  createEncryptedGroup: (
+    displayName: string,
+    matrixUserIds: string[],
   ) => Promise<string>;
 }
 
@@ -24,6 +30,7 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
     rooms,
     status,
     initialSyncComplete,
+    cryptoStatus,
     error,
     authenticationError,
     recentEvents,
@@ -32,15 +39,22 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
   const createDirect = useCallback(
     async (_userId: string, displayName: string, matrixUserId: string) => {
       if (!client) throw new Error("Sign in to start a conversation.");
-      const { Preset, Visibility } = await import("matrix-js-sdk");
-      const result = await client.createRoom({
-        visibility: Visibility.Private,
-        preset: Preset.TrustedPrivateChat,
-        is_direct: true,
-        invite: [matrixUserId],
+      return createEncryptedRoom(client, {
+        invitees: [matrixUserId],
         name: displayName,
+        isDirect: true,
       });
-      return result.room_id;
+    },
+    [client],
+  );
+  const createEncryptedGroup = useCallback(
+    async (displayName: string, matrixUserIds: string[]) => {
+      if (!client) throw new Error("Sign in to start an encrypted group.");
+      return createEncryptedRoom(client, {
+        invitees: matrixUserIds,
+        name: displayName,
+        isDirect: false,
+      });
     },
     [client],
   );
@@ -49,9 +63,11 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
     rooms,
     status,
     initialSyncComplete,
+    cryptoStatus,
     error,
     authenticationError,
     recentEvents,
     createDirect,
+    createEncryptedGroup,
   };
 }

@@ -67,24 +67,51 @@ in the existing login response. The frontend validates the expected Matrix ID,
 checks the credentials with Synapse `whoami`, then creates one managed
 `matrix-js-sdk` client for that authenticated browser session. The app JWT is
 never sent to Synapse, and the raw Matrix token is not persisted in browser
-storage.
+storage. Before sync, the client initializes the SDK's Rust/WASM crypto with
+an IndexedDB store namespaced to the homeserver, Matrix user, and Matrix
+device. A browser Web Lock prevents concurrent crypto clients from opening
+that store.
 
 The SDK owns long-poll synchronization, room/event models, and event delivery.
 The UI marks initial sync complete only when the SDK emits
 `SyncState.Prepared`; it relies on the SDK for reconnect and catch-up behavior.
-Live Matrix rooms are read-only in this step: the composer and attachment
-controls are disabled, and the UI does not send messages, upload media, or
-submit read markers. The composer remains a local-only interaction in demo
-mode. Message rendering uses plain text and ignores untrusted formatted HTML.
-Encrypted-room decryption is not configured in this step.
+New direct rooms are created encrypted from their initial state. The live text
+composer sends only when both the room state and Rust crypto confirm encryption;
+existing plaintext rooms fail closed. Timeline content is rendered as plain
+text, and the SDK refreshes the room model when decryption completes.
+Attachments and read-marker submission are not implemented. The demo
+composer remains local-only.
 
-There is no FastAPI message or WebSocket endpoint. See the root
-[Matrix frontend integration guide](../docs/matrix-frontend-integration.md) for
-session handling, CORS, logout, reconnect, future E2EE, and live-test steps.
+Device identity, cross-signing, interactive SAS verification, encrypted key
+backup, and recovery-key setup are available in **Encryption and devices**.
+The app uses the SDK's strict signed-device policy; an unverified device is
+not silently trusted. New devices need an existing trusted backup and the
+user's recovery key to restore history. See the
+[E2EE guide](../docs/end-to-end-encryption.md) for the session lifecycle,
+storage limits, recovery procedure, and security assumptions. There is no
+FastAPI message or WebSocket endpoint.
 
-The real browser/Synapse test is opt-in and creates synthetic users and rooms
-in an isolated test database. Do not point it at a shared or production API.
-The guide describes the required test server and environment variables.
+Run the SDK-level and browser E2EE tests only against a disposable local
+development/test API and nonproduction Synapse. They create synthetic
+accounts, devices, rooms, and messages that remain on those services:
+
+```sh
+LUMACHAT_TEST_API_URL=http://localhost:8000/api/v1 \
+LUMACHAT_MATRIX_HOMESERVER_URL=http://localhost:8008 \
+LUMACHAT_MATRIX_SERVER_NAME=localhost \
+npm run test:e2ee-live
+
+LUMACHAT_TEST_API_URL=http://localhost:8000/api/v1 \
+LUMACHAT_MATRIX_HOMESERVER_URL=http://localhost:8008 \
+LUMACHAT_MATRIX_SERVER_NAME=localhost \
+LUMACHAT_WEB_URL=http://localhost:5173 \
+CHROMIUM_EXECUTABLE=/opt/google/chrome/chrome \
+npm run test:e2ee-browser
+```
+
+Never point the scripts at shared or production services. The separate
+`npm run test:matrix-live` command checks the earlier authentication,
+room-sync, reconnect, logout, and account-isolation flows.
 
 Browser Matrix requests need a browser-reachable Synapse URL such as
 `http://localhost:8008`; Docker-only hostnames such as `http://synapse:8008`

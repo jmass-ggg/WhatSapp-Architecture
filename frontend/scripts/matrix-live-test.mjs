@@ -37,10 +37,22 @@ let browserErrors = [];
 let browserConsoleErrors = [];
 let browserHttpErrors = [];
 let unsupportedRtcTransportResponses = 0;
+let expectedCryptoSetupResponses = 0;
+let expectedNotFoundConsoleErrors = 0;
 let expectedOfflinePageErrors = 0;
 let expectedOfflineNetworkErrors = 0;
 let browserOfflineForReconnect = false;
 let accountAWasLoggedOut = false;
+
+function isExpectedCryptoSetupNotFound(responseUrl) {
+  const path = new URL(responseUrl).pathname;
+  return (
+    path === "/_matrix/client/v3/room_keys/version" ||
+    /^\/_matrix\/client\/v3\/user\/[^/]+\/account_data\/(?:m\.secret_storage\.default_key|m\.cross_signing\.(?:master|user_signing|self_signing))$/.test(
+      path,
+    )
+  );
+}
 
 function ensureMatrixSession(session, expectedUserId) {
   assert.equal(typeof session?.access_token, "string");
@@ -200,6 +212,13 @@ try {
       unsupportedRtcTransportResponses += 1;
       return;
     }
+    if (
+      response.status() === 404 &&
+      isExpectedCryptoSetupNotFound(response.url())
+    ) {
+      expectedCryptoSetupResponses += 1;
+      return;
+    }
     if (response.status() >= 400) {
       browserHttpErrors.push(`${response.status()} ${response.url()}`);
     }
@@ -214,6 +233,13 @@ try {
       )
     ) {
       expectedOfflineNetworkErrors += 1;
+      return;
+    }
+    if (
+      text ===
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ) {
+      expectedNotFoundConsoleErrors += 1;
       return;
     }
     browserConsoleErrors.push(text);
@@ -247,10 +273,10 @@ try {
     true,
   );
   assert.equal(
-    await page.getByRole("button", { name: "Attach a file" }).isDisabled(),
-    true,
+    await page.getByRole("button", { name: "Attach a file" }).count(),
+    0,
   );
-  console.log("PASS live Matrix composer and upload controls remain disabled");
+  console.log("PASS plaintext room composer is blocked and live attachments are absent");
 
   const messageText = `Live Matrix event ${runId}`;
   const sent = await clientB.sendTextMessage(roomId, messageText);
@@ -345,32 +371,30 @@ try {
   });
   console.log("PASS registration route and navigation back to login");
 
-  const expectedRtc404Message =
-    "Failed to load resource: the server responded with a status of 404 (Not Found)";
-  const rtcConsoleErrors = browserConsoleErrors.filter(
-    (message) => message === expectedRtc404Message,
-  );
-  const unexpectedConsoleErrors = browserConsoleErrors.filter(
-    (message) => message !== expectedRtc404Message,
-  );
   if (
     browserErrors.length ||
-    unexpectedConsoleErrors.length ||
+    browserConsoleErrors.length ||
     browserHttpErrors.length
   ) {
     console.log(`Browser uncaught errors: ${JSON.stringify(browserErrors)}`);
     console.log(
-      `Unexpected browser console errors: ${JSON.stringify(unexpectedConsoleErrors)}`,
+      `Unexpected browser console errors: ${JSON.stringify(browserConsoleErrors)}`,
     );
     console.log(`Browser HTTP error responses: ${JSON.stringify(browserHttpErrors)}`);
   }
   assert.deepEqual(browserErrors, []);
-  assert.deepEqual(unexpectedConsoleErrors, []);
+  assert.deepEqual(browserConsoleErrors, []);
   assert.deepEqual(browserHttpErrors, []);
-  assert.equal(rtcConsoleErrors.length, unsupportedRtcTransportResponses);
+  assert.equal(
+    expectedNotFoundConsoleErrors,
+    unsupportedRtcTransportResponses + expectedCryptoSetupResponses,
+  );
   console.log("PASS browser JavaScript exceptions and unexpected console errors: 0");
   console.log(
     `PASS SDK's unsupported optional RTC probe produced ${unsupportedRtcTransportResponses} expected 404 response(s)`,
+  );
+  console.log(
+    `PASS new-account crypto discovery produced ${expectedCryptoSetupResponses} expected not-configured response(s)`,
   );
   console.log(
     `PASS intentional offline interruption produced ${expectedOfflineNetworkErrors} browser network error(s)`,

@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Ellipsis,
   Info,
+  LockKeyhole,
   Search,
   UserRound,
 } from "lucide-react";
@@ -9,11 +10,13 @@ import { useState } from "react";
 
 import { UserAvatar } from "../UserAvatar";
 import type { AuthMode, Conversation, MatrixSession } from "../../types";
+import type { MatrixCryptoStatus } from "../../types/matrix";
 
 interface ChatHeaderProps {
   conversation: Conversation | null;
   mode: AuthMode;
   matrixSession: MatrixSession | null;
+  cryptoStatus: MatrixCryptoStatus;
   searchOpen: boolean;
   onBack: () => void;
   onSearch: () => void;
@@ -24,6 +27,7 @@ export function ChatHeader({
   conversation,
   mode,
   matrixSession,
+  cryptoStatus,
   searchOpen,
   onBack,
   onSearch,
@@ -43,7 +47,9 @@ export function ChatHeader({
   }
 
   const status = conversation.isEncrypted
-    ? "Encrypted · decryption unavailable"
+    ? cryptoStatus === "ready"
+      ? "End-to-end encrypted · Rust crypto"
+      : "Encrypted room · crypto unavailable"
     : conversation.isTyping
       ? "typing…"
       : conversation.isOnline
@@ -52,7 +58,7 @@ export function ChatHeader({
           ? "Usually replies quickly"
           : conversation.isOnline === false
             ? "Offline"
-            : "Matrix conversation";
+            : "Not encrypted · sending blocked";
 
   return (
     <header className="chat-header">
@@ -76,6 +82,15 @@ export function ChatHeader({
       <div className="chat-header-person">
         <div className="chat-header-name-row">
           <h1>{conversation.name}</h1>
+          {conversation.isEncrypted && (
+            <span
+              className={`encrypted-room-indicator${cryptoStatus === "ready" ? " is-ready" : " is-error"}`}
+              aria-label={cryptoStatus === "ready" ? "End-to-end encrypted room" : "Encrypted room, crypto unavailable"}
+              title={cryptoStatus === "ready" ? "End-to-end encrypted with Matrix Rust crypto" : "Encryption is unavailable; sending is blocked"}
+            >
+              <LockKeyhole size={13} />
+            </span>
+          )}
           {conversation.isGroup && <span className="group-pill">Group</span>}
         </div>
         <span className={conversation.isTyping ? "typing-text" : ""}>

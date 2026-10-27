@@ -50,9 +50,37 @@ describe("Matrix event conversion", () => {
       "@self:localhost",
     );
 
-    expect(message?.text).toContain("decryption is not configured");
+    expect(message?.text).toContain("waiting for a room key");
     expect(message?.text).not.toContain("untrusted encrypted payload");
     expect(message?.matrix?.eventType).toBe("m.room.encrypted");
+    expect(message?.matrix?.encryptionStatus).toBe("pending");
+  });
+
+  it("shows a sanitized failure when the SDK supplies its m.bad.encrypted clear event", () => {
+    const failedEvent = {
+      getWireType: () => "m.room.encrypted",
+      getType: () => "m.room.message",
+      getSender: () => "@other:localhost",
+      getDate: () => new Date(1_750_000_000_000),
+      getTs: () => 1_750_000_000_000,
+      getId: () => "$failed:localhost",
+      isEncrypted: () => true,
+      isDecryptionFailure: () => true,
+      getClearContent: () => ({
+        msgtype: "m.bad.encrypted",
+        body: "** Unable to decrypt: sensitive crypto details **",
+      }),
+    } as unknown as MatrixEvent;
+
+    const message = messageFromMatrixEvent(
+      failedEvent,
+      "!room:localhost",
+      "@self:localhost",
+    );
+
+    expect(message?.text).toBe("Unable to decrypt this encrypted message.");
+    expect(message?.text).not.toContain("sensitive crypto details");
+    expect(message?.matrix?.encryptionStatus).toBe("failed");
   });
 
   it("ignores unsupported and malformed room events", () => {

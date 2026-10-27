@@ -18,17 +18,20 @@ import {
   matrixClientRegistry,
   type MatrixClientLease,
   type MatrixConnectionSnapshot,
+  type MatrixClientSession,
 } from "../services/matrix/session";
 
 export interface MatrixContextValue extends MatrixConnectionSnapshot {
   client: MatrixClient | null;
   session: MatrixSession | null;
+  manager: MatrixClientSession | null;
 }
 
 const EMPTY_CONTEXT_VALUE: MatrixContextValue = {
   ...EMPTY_MATRIX_CONNECTION_SNAPSHOT,
   client: null,
   session: null,
+  manager: null,
 };
 
 const MatrixContext = createContext<MatrixContextValue | null>(null);
@@ -123,6 +126,7 @@ export function MatrixProvider({ children }: PropsWithChildren) {
             ...snapshot,
             client: manager.client,
             session: matrixSession,
+            manager,
           }
         : isFailedSession
           ? {
@@ -131,6 +135,7 @@ export function MatrixProvider({ children }: PropsWithChildren) {
               error: sessionFailure.message,
               client: null,
               session: matrixSession,
+              manager: null,
             }
           : EMPTY_CONTEXT_VALUE,
     [isCurrent, isFailedSession, manager, matrixSession, sessionFailure, snapshot],

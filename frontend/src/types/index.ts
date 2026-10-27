@@ -83,6 +83,7 @@ export interface Message {
     roomId: string;
     eventType: string;
     senderId: string;
+    encryptionStatus?: "decrypted" | "pending" | "failed";
   };
 }
 

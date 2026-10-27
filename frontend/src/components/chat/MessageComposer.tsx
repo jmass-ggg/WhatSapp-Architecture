@@ -15,6 +15,7 @@ import {
 
 interface MessageComposerProps {
   disabled?: boolean;
+  attachmentsDisabled?: boolean;
   busy?: boolean;
   placeholder?: string;
   hint?: string;
@@ -25,6 +26,7 @@ const emojis = ["😊", "✨", "❤️", "🙌", "😂", "👍", "🎉", "☀️
 
 export function MessageComposer({
   disabled = false,
+  attachmentsDisabled = false,
   busy = false,
   placeholder = "Write a message…",
   hint = "Enter to send · Shift + Enter for a new line",
@@ -41,7 +43,12 @@ export function MessageComposer({
 
   async function submit() {
     const text = value.trim();
-    if ((!text && !file) || disabled || isBusy) return;
+    if (
+      (!text && !file) ||
+      disabled ||
+      isBusy ||
+      (file !== undefined && attachmentsDisabled)
+    ) return;
     setError("");
     setSending(true);
     try {
@@ -132,23 +139,27 @@ export function MessageComposer({
               </div>
             )}
           </div>
-          <button
-            className="composer-tool"
-            type="button"
-            aria-label="Attach a file"
-            onClick={() => fileRef.current?.click()}
-            disabled={disabled || isBusy}
-          >
-            <Paperclip size={20} />
-          </button>
-          <input
-            ref={fileRef}
-            className="sr-only"
-            type="file"
-            onChange={handleFile}
-            aria-label="Choose a file to attach"
-            disabled={disabled || isBusy}
-          />
+          {!attachmentsDisabled && (
+            <>
+              <button
+                className="composer-tool"
+                type="button"
+                aria-label="Attach a file"
+                onClick={() => fileRef.current?.click()}
+                disabled={disabled || isBusy}
+              >
+                <Paperclip size={20} />
+              </button>
+              <input
+                ref={fileRef}
+                className="sr-only"
+                type="file"
+                onChange={handleFile}
+                aria-label="Choose a file to attach"
+                disabled={disabled || isBusy}
+              />
+            </>
+          )}
         </div>
 
         <textarea

@@ -40,9 +40,11 @@ only to the configured Synapse homeserver.
 `MatrixClientRegistry` owns one SDK client for the current authenticated
 browser session. It reuses the client across React StrictMode effect
 re-invocation, disposes it on account changes, and isolates the SDK memory
-store for each session. The token is held in React/application memory only;
-the SDK's room cache is also configured as in-memory state. No raw Matrix
-access token is written to `localStorage` or `sessionStorage`.
+store for each session. It initializes Rust crypto before sync and uses the
+SDK's IndexedDB crypto store with a namespace derived from the homeserver,
+Matrix user, and Matrix device. A Web Lock prevents simultaneous clients from
+opening that store. Credentials and room/sync state remain in memory; no raw
+Matrix access token is written to `localStorage` or `sessionStorage`.
 
 The client is not initialized for demo or unauthenticated state. Matrix
 initialization failures are exposed as connection state and do not silently
@@ -50,8 +52,10 @@ fall back to demo messages.
 
 ## Synchronization and event handling
 
-After the identity check, the client calls the supported `startClient()` API
-with a bounded initial timeline. Listeners are attached before startup.
+After identity validation and `client.initRustCrypto()`, the client checks
+`client.getCrypto()` and reads its own device key before calling the supported
+`startClient()` API with a bounded initial timeline. Listeners are attached
+before startup.
 Calling `startClient()` is not treated as proof that sync succeeded: the UI
 marks the client ready only after `SyncState.Prepared`, when the SDK reports
 that initial sync data is available.
@@ -71,19 +75,28 @@ receipt, deletion, and sync events. It derives room lists and timeline content
 from SDK room models, sorts and deduplicates message IDs, and keeps a bounded
 recent-event record. Unsupported event types are ignored. `m.room.message`
 text is rendered as React text; `formatted_body` is not interpreted as HTML.
-An encrypted event is labeled as unavailable because Rust crypto has not been
-initialized in this step.
+Encrypted events remain pending until the SDK decrypts them. The session
+manager listens for the SDK's decryption event and refreshes the room model;
+decryption failures show a sanitized unavailable-message label, never raw
+ciphertext.
 
 The current React UI consumes the SDK-backed room state and connection status.
 The existing demo conversations remain explicitly marked demo-only and are
 not included in the live Matrix room list.
 
-Live room timelines are read-only in this step. The message composer and file
-controls are disabled for authenticated Matrix sessions; text/file sends,
-media uploads, and read-marker submission are deferred. The existing composer
-continues to work only inside the local demo preview. The existing directory
-flow may create a direct Matrix room, but this step does not implement group
-chat or a production message composer.
+The live composer sends text only when Rust crypto is ready and Synapse plus the
+SDK both confirm that the room is encrypted. New direct rooms include
+`m.room.encryption` in their creation state. Existing plaintext rooms are not
+silently converted and reject sends. Encrypted attachments, media uploads,
+read-marker submission, and read-receipt UI are not implemented. Demo messages
+remain local to the demo preview.
+
+The **Encryption and devices** dialog exposes cross-signing readiness,
+device fingerprints and trust, in-room SAS verification, and recovery-key and
+backup setup. Unknown devices are never automatically trusted. The SDK uses
+`OnlySignedDevicesIsolationMode`; users must establish signed device identity
+before receiving plaintext from a sender under this policy. See
+[End-to-end encryption](end-to-end-encryption.md) for details.
 
 ## Reconnects, expiry, and logout
 
@@ -102,8 +115,9 @@ is required if the Matrix session is rejected.
 The pinned SDK also probes the optional MSC4143 `/rtc/transports` endpoint
 when a client starts. Synapse v1.163.2 returns 404 because this application
 does not use Matrix RTC; the SDK treats that response as a cached unsupported
-feature. The live browser test permits only this known endpoint-specific 404
-and fails on other HTTP or console errors.
+feature. On a new Matrix account, crypto discovery can also return 404 for
+not-yet-configured secret storage and key backup. The live browser test allows
+only these exact expected responses and fails on other HTTP or console errors.
 
 On sign-out, LumaChat stops sync and removes SDK listeners before calling the
 existing FastAPI logout endpoint. FastAPI revokes the refresh session and
@@ -130,9 +144,11 @@ were checked with browser-origin preflight requests during this integration.
 
 ## Automated and live tests
 
-The frontend tests cover client configuration and credentials, identity
-validation, initial-sync transitions, live event deduplication, room mapping,
-reconnect state, listener cleanup, expired tokens, and account changes:
+The frontend tests cover client configuration and credentials, Rust crypto
+initialization, identity validation, initial-sync transitions, encrypted room
+creation and fail-closed sending, event decryption updates and deduplication,
+crypto-store isolation, recovery validation, reconnect state, listener cleanup,
+expired tokens, and account changes:
 
 ```sh
 cd frontend
@@ -141,18 +157,23 @@ npm test
 npm run build
 ```
 
-The opt-in browser test uses real FastAPI, Synapse, and Chromium. It registers
-two random synthetic users, signs User A in through the React login page,
-creates a test room, has User B send a real Matrix event, checks the received
-event's room ID, event ID, sender, and type in the UI, verifies the live
-composer is disabled, interrupts only the test browser's connectivity, and
-verifies catch-up. It then signs out User A, signs User B in, checks that User
-A's private room is absent, and checks the mobile layout and auth-route
-navigation.
+The Step 06 `npm run test:matrix-live` regression uses real FastAPI, Synapse,
+and Chromium to check login, sync, unencrypted-room send blocking, reconnect,
+logout/account isolation, and responsive UI behavior.
 
-Run the test only against the isolated `chat_app_test` database. In one
-terminal, start a temporary backend container mapped to port 8001. This does
-not replace the regular backend on port 8000:
+The Step 07 `npm run test:e2ee-live` harness uses independent Matrix SDK
+clients to check cross-signing, SAS verification, encrypted DM and group
+messages, server-visible ciphertext, late-member history boundaries, and
+fresh-device key-backup recovery. `npm run test:e2ee-browser` drives Chromium
+through recovery setup and explicit SAS emoji comparison, checks that React
+decrypts a live event and sends a message User B decrypts, then interrupts only
+the test browser's network and checks that an offline encrypted event is
+decrypted after sync resumes. These tests create synthetic accounts/devices,
+rooms, and messages that remain in the local services.
+
+For the Step 06 `test:matrix-live` regression, use the isolated
+`chat_app_test` database. In one terminal, start a temporary backend container
+mapped to port 8001. This does not replace the regular backend on port 8000:
 
 ```sh
 FASTAPI_PORT=8001 docker compose -f compose.backend.yaml run --rm --service-ports \
@@ -191,28 +212,21 @@ the test. It never prints passwords or access tokens. It logs out the test
 Matrix sessions and browser sessions; the synthetic account rows remain in
 the test database, and the test-only Matrix rooms/messages remain on Synapse.
 
+The Step 07 E2EE harnesses create synthetic accounts, Matrix devices, encrypted
+rooms, and messages that remain on the configured API and homeserver. They do
+not validate that the API is isolated, so point them only at a disposable local
+development/test API with registration enabled and a nonproduction Synapse.
+Never use a shared or production service. The SDK live script needs only the
+API and Synapse; the browser E2EE script also needs Vite and Chromium.
+
 ## Security and E2EE boundary
 
-This stage synchronizes Matrix events but does not implement or verify
-end-to-end encryption. It does not call deprecated legacy crypto
-initialization APIs, and it does not claim encrypted-room contents can be
-decrypted. Matrix messages and room names are untrusted input and are rendered
-as text.
-
-A future E2EE stage should:
-
-- Call the SDK's supported `initRustCrypto()` exactly once for the managed
-  client and await it before starting sync.
-- Use the SDK's Rust/WASM crypto implementation with IndexedDB-backed crypto
-  storage. Do not create multiple clients that share one IndexedDB crypto
-  store; the official SDK warns that concurrent access can corrupt crypto
-  state. See the [official SDK repository](https://github.com/matrix-org/matrix-js-sdk).
-- Define secure session recovery that preserves a stable Matrix device ID and
-  device identity across refreshes without putting raw access tokens in
-  browser storage.
-- Implement recovery-key backup/restore, device verification, cross-signing,
-  encrypted timeline event handling, and multi-device key synchronization.
-- Test encryption and decryption between independently verified devices;
-  ciphertext presence alone is not proof of E2EE.
-
-Those requirements are future work and are not enabled by this integration.
+Encrypted-room message bodies are encrypted by the SDK on the sender and
+decrypted by recipient SDK clients. Synapse stores and routes
+`m.room.encrypted` events; it still observes room membership, event timing,
+device metadata, and unencrypted room state. Plaintext rooms are visibly
+distinguished and reject live sends. Matrix messages and room names are
+untrusted input and render as text. Full session restoration, encrypted
+attachments, and broader device management remain future work. See
+[End-to-end encryption](end-to-end-encryption.md) for the trust policy,
+recovery design, live test evidence, and limitations.

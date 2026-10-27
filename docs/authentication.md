@@ -60,9 +60,10 @@ for FastAPI and Synapse.
 
 ## Matrix Device and Encryption Keys
 
-The browser uses the Matrix JavaScript SDK for sync, but does not initialize
-Rust crypto or manage device keys and encrypted events. A future E2EE stage
-must own device verification, key-backup/recovery, and encryption UX. Matrix
-cryptographic keys are distinct from JWT signing keys. Loss of Matrix device
-keys can make encrypted history unreadable; key recovery must be designed and
-tested. E2EE has not been implemented or verified.
+After FastAPI returns a Matrix session, the browser verifies its Matrix user
+and device identity, initializes the JavaScript SDK's Rust crypto, and then
+starts sync. The SDK manages device keys, cross-signing, SAS verification,
+encrypted text events, and key-backup/recovery. Matrix cryptographic keys are
+distinct from JWT signing keys and never pass through FastAPI. Loss of Matrix
+device keys can make encrypted history unreadable; the local recovery flow is
+described in [End-to-end encryption](end-to-end-encryption.md).

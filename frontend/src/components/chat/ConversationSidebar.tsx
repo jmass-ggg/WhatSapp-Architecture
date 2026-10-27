@@ -76,8 +76,8 @@ export function ConversationSidebar({
             type="button"
             className="sidebar-icon-button"
             onClick={onSettings}
-            aria-label="Preferences"
-            title="Preferences"
+            aria-label="Encryption and devices"
+            title="Encryption and devices"
           >
             <Settings2 size={18} />
           </button>

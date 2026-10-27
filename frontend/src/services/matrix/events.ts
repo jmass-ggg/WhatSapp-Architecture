@@ -21,6 +21,7 @@ export function messageFromMatrixEvent(
   roomId: string,
   ownUserId: string,
 ): Message | null {
+  const wireType = event.getWireType();
   const eventType = event.getType();
   const senderId = event.getSender();
   if (!senderId) return null;
@@ -28,26 +29,35 @@ export function messageFromMatrixEvent(
   const sentAt = event.getDate() ?? new Date(event.getTs() || Date.now());
   const eventId = event.getId();
 
-  if (eventType === "m.room.encrypted") {
+  const encrypted = wireType === "m.room.encrypted" || event.isEncrypted();
+  const clearContent = encrypted ? event.getClearContent() : null;
+
+  if (encrypted && (!clearContent || event.isDecryptionFailure())) {
+    const failed = event.isDecryptionFailure();
     return {
       id: eventId ?? `encrypted-${senderId}-${event.getTs()}`,
       sender: senderId === ownUserId ? "me" : "them",
       senderName: senderId,
-      text: "Encrypted message · decryption is not configured in this client.",
+      text: failed
+        ? "Unable to decrypt this encrypted message."
+        : "Encrypted message · waiting for a room key.",
       sentAt,
       delivery: "sent",
       matrix: {
         eventId: eventId ?? "",
         roomId,
-        eventType,
+        eventType: wireType,
         senderId,
+        encryptionStatus: failed ? "failed" : "pending",
       },
     };
   }
 
-  if (eventType !== "m.room.message") return null;
+  const clearType = encrypted ? eventType : wireType;
+  if (clearType !== "m.room.message") return null;
 
-  const content = event.getContent<Record<string, unknown>>();
+  const content = (clearContent ??
+    event.getContent<Record<string, unknown>>()) as Record<string, unknown>;
   const messageType =
     typeof content.msgtype === "string" ? content.msgtype : "";
   const body = typeof content.body === "string" ? content.body : "";
@@ -87,8 +97,9 @@ export function messageFromMatrixEvent(
     matrix: {
       eventId: eventId ?? "",
       roomId,
-      eventType,
+      eventType: wireType,
       senderId,
+      ...(encrypted ? { encryptionStatus: "decrypted" as const } : {}),
     },
   };
 }

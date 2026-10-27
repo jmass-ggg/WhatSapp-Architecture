@@ -51,18 +51,21 @@ Synapse-issued session returned by FastAPI login. It uses the Matrix
 Client-Server API directly for:
 
 - Room membership, room state, timeline sync, and event delivery.
-- Direct-room creation from the existing user-directory flow.
+- Encrypted direct-room creation and encrypted text sending through the Matrix
+  JavaScript SDK.
 - Incoming typing and receipt-related state, plus media downloads for received
   avatars and attachments.
 
-The live timeline is read-only in this integration stage. The live composer,
-message/file sending, media uploads, and read-marker submission are not
-connected; the existing message composer remains available in demo mode.
+The live composer only sends text in rooms confirmed encrypted by both the room
+state and Rust crypto. Existing plaintext rooms fail closed. Media uploads,
+encrypted attachment handling, and read-marker submission are not connected;
+demo messages remain local to demo mode.
 
 FastAPI owns the app-password authentication and exchanges a short-lived
 server-signed JWT for the Synapse session. The browser does not submit a Matrix
-password or create an independent Matrix login. Device verification, E2EE,
-and encrypted attachments are not implemented by this frontend.
+password or create an independent Matrix login. The browser SDK owns Rust
+crypto, cross-signing, SAS device verification, encrypted text events, and
+key-backup/recovery. Encrypted attachments are not implemented.
 
 Synapse is the source of truth for these operations. The Matrix specification
 defines its own client authentication and access tokens; these are not
@@ -126,8 +129,11 @@ requires authorization; browser `<img>` loads must not assume media is public.
 Missing keys, unverified devices, and recovery flows must be surfaced in the UI
 rather than silently treating content as verified.
 
-The planned client is `matrix-js-sdk`; use its documented Rust/WASM crypto API
-and persistent crypto storage, and enforce one active client per crypto store.
+The client is `matrix-js-sdk`; it uses the Rust/WASM crypto API and its
+IndexedDB-backed crypto storage, with one active client per isolated crypto
+store.
 The [Matrix JS SDK encryption documentation](https://matrix-org.github.io/matrix-js-sdk/#end-to-end-encryption-support)
 documents initialization, secret storage, device verification, backup, and
-storage constraints. E2EE is not implemented or verified by this backend step.
+storage constraints. The local E2EE tests verify encrypted text exchange and
+recovery against the development Synapse; this does not constitute a
+production security audit or protect compromised endpoints.
