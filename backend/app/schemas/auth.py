@@ -55,5 +55,21 @@ class AccessTokenResponse(BaseModel):
     expires_in: int
 
 
+class MatrixSessionResponse(BaseModel):
+    access_token: str
+    user_id: str
+    device_id: str
+    home_server: str | None = None
+    expires_in_ms: int | None = None
+
+
+class LoginResponse(AccessTokenResponse):
+    matrix: MatrixSessionResponse
+
+
+class LogoutRequest(BaseModel):
+    matrix_access_token: SecretStr | None = Field(default=None, max_length=4096)
+
+
 class MessageResponse(BaseModel):
     message: str

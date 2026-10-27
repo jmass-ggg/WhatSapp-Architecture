@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set app-only development values without changing Synapse credentials."""
+"""Set app and Synapse JWT bridge secrets without replacing local credentials."""
 
 from __future__ import annotations
 
@@ -60,14 +60,21 @@ def main() -> None:
         "APP_DATABASE_PASSWORD",
         "APP_DATABASE_ADMIN_PASSWORD",
         "APP_JWT_SIGNING_KEY",
+        "SYNAPSE_JWT_SIGNING_KEY",
     ):
         current = values.get(key, "")
         if len(current) < 32 or SECRET_PLACEHOLDER.search(current):
             updates[key] = (
                 secrets.token_urlsafe(48)
-                if key == "APP_JWT_SIGNING_KEY"
+                if key in {"APP_JWT_SIGNING_KEY", "SYNAPSE_JWT_SIGNING_KEY"}
                 else secrets.token_hex(32)
             )
+
+    if (
+        values.get("APP_JWT_SIGNING_KEY")
+        and values.get("APP_JWT_SIGNING_KEY") == values.get("SYNAPSE_JWT_SIGNING_KEY")
+    ):
+        updates["SYNAPSE_JWT_SIGNING_KEY"] = secrets.token_urlsafe(48)
 
     for key, value in updates.items():
         if key in indexes:
@@ -92,7 +99,7 @@ def main() -> None:
             pass
         raise
 
-    print("Updated app-only local settings and ensured strong app secrets; Synapse settings were preserved.")
+    print("Updated app settings and ensured separate strong application and Synapse JWT secrets.")
 
 
 if __name__ == "__main__":

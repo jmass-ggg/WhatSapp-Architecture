@@ -12,11 +12,24 @@ config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 if not isinstance(config, dict):
     raise SystemExit("Generated Synapse config must be a YAML mapping")
 
+jwt_signing_key = os.environ.get("SYNAPSE_JWT_SIGNING_KEY", "")
+if len(jwt_signing_key.encode("utf-8")) < 32:
+    raise SystemExit("SYNAPSE_JWT_SIGNING_KEY must contain at least 32 bytes")
+
 config["server_name"] = os.environ["SYNAPSE_SERVER_NAME"]
 config["public_baseurl"] = os.environ["SYNAPSE_PUBLIC_URL"].rstrip("/") + "/"
 config["report_stats"] = False
 config["enable_registration"] = False
 config["allow_guest_access"] = False
+config["jwt_config"] = {
+    "enabled": True,
+    "secret": jwt_signing_key,
+    "algorithm": "HS256",
+    "subject_claim": "sub",
+    "display_name_claim": "display_name",
+    "issuer": os.environ["SYNAPSE_JWT_ISSUER"],
+    "audiences": [os.environ["SYNAPSE_JWT_AUDIENCE"]],
+}
 config["federation_domain_whitelist"] = []
 config["trusted_key_servers"] = []
 config["media_store_path"] = "/data/media_store"

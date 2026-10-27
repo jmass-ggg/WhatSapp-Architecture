@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import CurrentUser, get_current_user
+from app.api.dependencies import CurrentUser, get_current_user, get_matrix_client
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import limit_login
+from app.core.security import create_synapse_login_token
+from app.integrations.matrix.client import MatrixClient, MatrixConnectionError
 from app.models.user import User
-from app.schemas.auth import AccessTokenResponse, LoginRequest, MessageResponse, RegisterRequest
+from app.schemas.auth import (
+    AccessTokenResponse,
+    LoginRequest,
+    LoginResponse,
+    LogoutRequest,
+    MatrixSessionResponse,
+    MessageResponse,
+    RegisterRequest,
+)
 from app.schemas.user import UserMeRead
 from app.services.auth import (
     authenticate_user,
@@ -25,6 +36,7 @@ from app.services.users import get_visible_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 _REFRESH_COOKIE = "app_refresh"
+logger = logging.getLogger("app.auth")
 
 
 def _unauthorized_refresh() -> HTTPException:
@@ -66,20 +78,54 @@ def register(
 
 @router.post(
     "/login",
-    response_model=AccessTokenResponse,
+    response_model=LoginResponse,
     dependencies=[Depends(limit_login)],
 )
 def login(
     payload: LoginRequest,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
-) -> AccessTokenResponse:
+    matrix_client: Annotated[MatrixClient, Depends(get_matrix_client)],
+) -> LoginResponse:
     user = authenticate_user(db, payload.login, payload.password.get_secret_value())
-    access_token, refresh_token = issue_session(db, user)
+    display_name = (
+        user.profile.display_name if user.profile is not None else user.username
+    )
+    matrix_login_token, expected_matrix_user_id = create_synapse_login_token(
+        user.id,
+        display_name,
+    )
+    try:
+        matrix_session = matrix_client.login_with_jwt(
+            matrix_login_token,
+            expected_matrix_user_id,
+        )
+    except MatrixConnectionError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Matrix authentication is temporarily unavailable",
+        ) from None
+
+    try:
+        access_token, refresh_token = issue_session(db, user)
+    except Exception:
+        try:
+            matrix_client.logout(matrix_session.access_token)
+        except MatrixConnectionError:
+            logger.warning("synapse_session_cleanup_failed")
+        raise
+
     _set_refresh_cookie(response, refresh_token)
-    return AccessTokenResponse(
+    return LoginResponse(
         access_token=access_token,
         expires_in=settings.app_jwt_ttl_seconds,
+        matrix=MatrixSessionResponse(
+            access_token=matrix_session.access_token,
+            user_id=matrix_session.user_id,
+            device_id=matrix_session.device_id,
+            home_server=matrix_session.home_server,
+            expires_in_ms=matrix_session.expires_in_ms,
+        ),
     )
 
 
@@ -103,9 +149,17 @@ def refresh(
 def logout(
     response: Response,
     db: Annotated[Session, Depends(get_db)],
+    matrix_client: Annotated[MatrixClient, Depends(get_matrix_client)],
     refresh_token: Annotated[str | None, Cookie(alias=_REFRESH_COOKIE)] = None,
+    payload: LogoutRequest | None = None,
 ) -> Response:
     revoke_refresh_token(db, refresh_token)
+    if payload is not None and payload.matrix_access_token is not None:
+        try:
+            matrix_client.logout(payload.matrix_access_token.get_secret_value())
+        except MatrixConnectionError:
+            # The app refresh session is revoked even if Synapse is unavailable.
+            logger.warning("synapse_logout_failed")
     response.delete_cookie(
         key=_REFRESH_COOKIE,
         path="/api/v1/auth",

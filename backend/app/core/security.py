@@ -53,6 +53,36 @@ def create_access_token(user_id: UUID, now: datetime | None = None) -> str:
     )
 
 
+def matrix_localpart(user_id: UUID) -> str:
+    """Return a stable, collision-resistant Synapse localpart for an app user."""
+    return f"u_{user_id.hex}"
+
+
+def create_synapse_login_token(
+    user_id: UUID,
+    display_name: str,
+    now: datetime | None = None,
+) -> tuple[str, str]:
+    issued_at = now or datetime.now(UTC)
+    expires_at = issued_at + timedelta(seconds=settings.synapse_jwt_ttl_seconds)
+    localpart = matrix_localpart(user_id)
+    payload = {
+        "sub": localpart,
+        "iss": settings.synapse_jwt_issuer,
+        "aud": [settings.synapse_jwt_audience],
+        "iat": issued_at,
+        "exp": expires_at,
+        "jti": uuid4().hex,
+        "display_name": display_name,
+    }
+    token = jwt.encode(
+        payload,
+        settings.synapse_jwt_signing_key.get_secret_value(),
+        algorithm=settings.synapse_jwt_algorithm,
+    )
+    return token, f"@{localpart}:{settings.synapse_server_name}"
+
+
 def decode_access_token(token: str) -> UUID:
     payload = jwt.decode(
         token,

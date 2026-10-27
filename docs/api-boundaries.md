@@ -29,7 +29,7 @@ health checks. Implemented routes include:
 
 | Route | Responsibility |
 | --- | --- |
-| `POST /api/v1/auth/register`, `/login`, `/refresh`, `/logout`; `GET /api/v1/auth/me` | App-owned authentication and session lifecycle. |
+| `POST /api/v1/auth/register`, `/login`, `/refresh`, `/logout`; `GET /api/v1/auth/me` | App authentication and session lifecycle. Login returns an app JWT plus a Synapse-issued Matrix session. |
 | `GET/PATCH /api/v1/users/me`; `GET /api/v1/users`, `/search`, `/{user_id}` | Self-service account changes and authorized directory lookup. |
 | `GET /api/v1/profiles/{user_id}`; `PATCH /api/v1/profiles/me` | Read a visible profile or update the caller's profile. |
 | `GET /api/v1/subscriptions/me`, `/plans`; `GET /api/v1/access/check` | Illustrative plans and configured feature checks. |
@@ -37,15 +37,16 @@ health checks. Implemented routes include:
 | `GET /health`, `/api/v1/health`, `/api/v1/health/ready` | Process and application database status. |
 | `GET /api/v1/health/synapse` | Separate Matrix versions-endpoint diagnostic. |
 
-The backend's Matrix client currently performs only the versions check. It
-does not create accounts or rooms, proxy messages, synchronization, media,
-typing, or receipts. Any future provisioning must be narrowly scoped,
-idempotent, explicitly authorized, and audited.
+The backend's Matrix client performs the versions check and a narrow login
+exchange. After validating an app password, FastAPI sends Synapse a
+short-lived, server-signed JWT using Synapse's `org.matrix.login.jwt` flow.
+Synapse creates the mapped Matrix account on first login and issues the Matrix
+access token. FastAPI does not create passwords in Synapse or proxy rooms,
+synchronization, media, typing, or receipts.
 
 ## Matrix-Owned Operations
 
-When implemented, the Matrix SDK will use the Matrix Client-Server API directly
-for:
+The Matrix SDK uses the Matrix Client-Server API directly for:
 
 - Matrix authentication/session and device management.
 - Direct/group rooms, membership, room state, and message send/history.
@@ -62,33 +63,38 @@ FastAPI-issued credentials. See the [Matrix Client-Server API](https://spec.matr
 
 | Credential | Issuer | Audience/use | Must not be used for |
 | --- | --- | --- | --- |
-| Application JWT | FastAPI after app-owned password login (OIDC is future work) | FastAPI application REST endpoints only | Synapse Client-Server API, database login, or identity-provider login |
-| Matrix access/refresh token | Synapse through its supported Matrix/OIDC login flow | Matrix Client-Server API and the corresponding Matrix device/session | FastAPI authorization unless a specific token-exchange design is separately reviewed |
-| Synapse admin credential | Synapse/admin provisioning process | Server-side administrative provisioning only, if needed | Browser storage or ordinary user Matrix requests |
+| Application JWT | FastAPI after app-owned password login | FastAPI application REST endpoints only | Synapse Client-Server API, database login, or identity-provider login |
+| FastAPI-to-Synapse login assertion | FastAPI, signed with a dedicated shared secret and 60-second expiry | The Synapse JWT login endpoint only | Browser storage, FastAPI API authorization, or Matrix Client-Server API calls |
+| Matrix access token | Synapse after validating the login assertion | Matrix Client-Server API and the corresponding Matrix device/session | FastAPI authorization |
+| Synapse JWT signing key | Shared by FastAPI and Synapse server configuration | Validating the server-side login assertion | Browser storage, app JWT signing, logs, or ordinary user Matrix requests |
 
-Do not derive a Matrix token from an app JWT, forward one token as the other, or
-assume Synapse accepts arbitrary FastAPI JWTs. OIDC-based identity correlation
-and an app-user-to-Matrix-user record are future work; no account linkage is
-currently configured.
+The app JWT is not forwarded to Synapse. FastAPI creates a separate assertion
+after password validation, and returns only the app JWT and Synapse-issued
+Matrix access token. A stable Matrix localpart is derived from the immutable
+application user UUID rather than a mutable username or email address.
 
-## Secure Login Integration Proposal
+## Login and Logout Flow
 
-Current local app login uses a username/email and password; Matrix login is
-not integrated and must remain a separate flow. A future SSO design may use a
-trusted OIDC provider with separate clients/audiences for FastAPI and Synapse.
-FastAPI must validate credentials intended for its API and issue a short-lived
-app JWT, while Synapse issues its own Matrix token/device session. Neither
-service accepts the other's token.
+FastAPI validates the supplied app password and then requests a Matrix session
+from Synapse. If Synapse cannot complete the exchange, login fails closed and
+FastAPI does not issue an app refresh session. The browser uses the app JWT for
+FastAPI and the Matrix access token for its Matrix SDK. On logout, clients can
+send the Matrix access token in the optional request body so FastAPI can revoke
+the Matrix device session and the app refresh-token family.
 
 The app returns short-lived JWTs in JSON and stores refresh tokens only as
 hashes server-side while sending the raw refresh token in an HttpOnly cookie.
 Keep access tokens short-lived, use exact CORS origins, and review CSRF,
-cookie, TLS, and trusted-proxy behavior before production. Matrix credentials
-belong to the Matrix SDK session/device store. Never log tokens or expose a
-Synapse admin credential to the browser.
+cookie, TLS, and trusted-proxy behavior before production. Matrix session
+credentials belong in the Matrix SDK session/device store. Never log tokens or
+expose the shared JWT signing key to the browser.
 
-Synapse has OIDC integration documentation; configuration and compatibility
-must be checked against the selected Synapse release before implementation:
+Synapse's JWT login is a non-standard, server-side flow documented for the
+selected Synapse release:
+[Synapse JWT Login Type](https://element-hq.github.io/synapse/v1.163/jwt.html).
+
+OIDC remains a future alternative; configuration and compatibility must be
+checked against the selected Synapse release before implementation:
 [Synapse OIDC documentation](https://element-hq.github.io/synapse/latest/openid.html).
 
 ## E2EE and Message Payloads

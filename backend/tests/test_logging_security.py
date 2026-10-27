@@ -11,6 +11,8 @@ def test_secret_redaction_covers_quoted_values_and_bearer_headers() -> None:
         "access-value",
         "refresh-value",
         "matrix-access-value",
+        "matrix-session-value",
+        "synapse-signing-key-value",
     )
     record = logging.LogRecord(
         name="test",
@@ -21,7 +23,9 @@ def test_secret_redaction_covers_quoted_values_and_bearer_headers() -> None:
             'password="password with spaces" '
             "access_token=access-value "
             "refresh_token: refresh-value "
-            "Authorization: Bearer matrix-access-value"
+            "Authorization: Bearer matrix-access-value "
+            "matrix_access_token=matrix-session-value "
+            "SYNAPSE_JWT_SIGNING_KEY=synapse-signing-key-value"
         ),
         args=(),
         exc_info=None,

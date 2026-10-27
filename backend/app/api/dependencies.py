@@ -11,10 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import decode_access_token
+from app.integrations.matrix.client import MatrixClient
 from app.models.user import User
 
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def get_matrix_client() -> MatrixClient:
+    return MatrixClient()
 
 
 def get_current_user(

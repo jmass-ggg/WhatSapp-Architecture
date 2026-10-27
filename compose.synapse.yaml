@@ -47,6 +47,9 @@ services:
       SYNAPSE_HTTP_PORT: ${SYNAPSE_HTTP_PORT:-8008}
       SYNAPSE_NO_TLS: "yes"
       SYNAPSE_LOG_LEVEL: ${SYNAPSE_LOG_LEVEL:-INFO}
+      SYNAPSE_JWT_ISSUER: ${SYNAPSE_JWT_ISSUER:-realtime-chat-synapse-login}
+      SYNAPSE_JWT_AUDIENCE: ${SYNAPSE_JWT_AUDIENCE:-realtime-chat-synapse}
+      SYNAPSE_JWT_SIGNING_KEY: ${SYNAPSE_JWT_SIGNING_KEY:?Set SYNAPSE_JWT_SIGNING_KEY in .env}
       SYNAPSE_CONFIG_DIR: /data
       SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
       SYNAPSE_DATA_DIR: /data

@@ -12,17 +12,50 @@ from sqlalchemy.orm import Session, sessionmaker
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
+from app.api.dependencies import get_matrix_client
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import login_rate_limiter
 from app.core.security import hash_password
 from app.main import create_app
+from app.integrations.matrix.client import MatrixConnectionError, MatrixSession
 from app.models.base import Base
 from app.models.organization import Organization
 from app.models.profile import Profile
 from app.models.subscription import Subscription
 from app.models.user import User
 from tests.http_client import ApiClient
+
+
+class FakeMatrixClient:
+    def __init__(self) -> None:
+        self.login_requests: list[tuple[str, str]] = []
+        self.logout_tokens: list[str] = []
+        self.fail_login = False
+        self.fail_logout = False
+
+    def login_with_jwt(
+        self,
+        login_token: str,
+        expected_user_id: str,
+    ) -> MatrixSession:
+        if self.fail_login:
+            raise MatrixConnectionError("Synapse authentication is unavailable")
+        self.login_requests.append((login_token, expected_user_id))
+        return MatrixSession(
+            access_token=f"matrix-{len(self.login_requests)}",
+            user_id=expected_user_id,
+            device_id=f"DEVICE{len(self.login_requests)}",
+            home_server="localhost",
+        )
+
+    def logout(self, access_token: str) -> None:
+        if self.fail_logout:
+            raise MatrixConnectionError("Synapse logout is unavailable")
+        self.logout_tokens.append(access_token)
+
+    def health(self) -> dict[str, int | str]:
+        return {"status": "ok", "supported_versions": 1}
 
 
 @pytest.fixture
@@ -60,7 +93,16 @@ def db_session(test_engine: Engine):
 
 
 @pytest.fixture
-def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch):
+def matrix_client() -> FakeMatrixClient:
+    return FakeMatrixClient()
+
+
+@pytest.fixture
+def client(
+    test_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    matrix_client: FakeMatrixClient,
+):
     monkeypatch.setattr(settings, "app_registration_enabled", True)
     login_rate_limiter.clear()
     factory = sessionmaker(bind=test_engine, autoflush=False, expire_on_commit=False)
@@ -71,6 +113,7 @@ def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch):
 
     application = create_app()
     application.dependency_overrides[get_db] = override_get_db
+    application.dependency_overrides[get_matrix_client] = lambda: matrix_client
     with ApiClient(application) as test_client:
         yield test_client
     application.dependency_overrides.clear()

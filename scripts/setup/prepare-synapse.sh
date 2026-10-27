@@ -15,13 +15,14 @@ if [[ -e synapse/config/homeserver.yaml ]]; then
 fi
 
 command -v openssl >/dev/null || {
-  printf 'openssl is required to generate local database passwords\n' >&2
+  printf 'openssl is required to generate local database passwords and JWT keys\n' >&2
   exit 1
 }
 
 umask 077
 cp .env.example .env
 synapse_db_password="$(openssl rand -hex 32)"
+synapse_jwt_signing_key="$(openssl rand -hex 32)"
 postgres_password="$(openssl rand -hex 32)"
 local_uid="$(id -u)"
 local_gid="$(id -g)"
@@ -29,11 +30,12 @@ local_gid="$(id -g)"
 sed -i \
   -e "s|^POSTGRES_SUPERUSER_PASSWORD=.*|POSTGRES_SUPERUSER_PASSWORD=${postgres_password}|" \
   -e "s|^SYNAPSE_DATABASE_PASSWORD=.*|SYNAPSE_DATABASE_PASSWORD=${synapse_db_password}|" \
+  -e "s|^SYNAPSE_JWT_SIGNING_KEY=.*|SYNAPSE_JWT_SIGNING_KEY=${synapse_jwt_signing_key}|" \
   -e "s|^LOCAL_UID=.*|LOCAL_UID=${local_uid}|" \
   -e "s|^LOCAL_GID=.*|LOCAL_GID=${local_gid}|" \
   .env
 chmod 0600 .env
-unset synapse_db_password postgres_password
+unset synapse_db_password synapse_jwt_signing_key postgres_password
 
 docker compose -f compose.synapse.yaml run --rm --no-deps synapse generate
 docker compose -f compose.synapse.yaml run --rm --no-deps \

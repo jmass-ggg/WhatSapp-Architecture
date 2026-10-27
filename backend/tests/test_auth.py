@@ -8,6 +8,7 @@ import pytest
 from app.core.config import settings
 from app.core.rate_limit import login_rate_limiter
 from app.core.security import decode_access_token, hash_password, verify_password
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from tests.http_client import ApiClient
 
@@ -86,22 +87,122 @@ def test_registration_can_be_disabled(client: ApiClient, monkeypatch: pytest.Mon
     assert response.status_code == 403
 
 
-def test_login_issues_app_jwt_and_httponly_refresh_cookie(client: ApiClient) -> None:
+def test_login_issues_app_and_matrix_sessions_with_separate_jwts(
+    client: ApiClient,
+    matrix_client,
+) -> None:
     register(client)
     response = login(client)
 
     assert response.status_code == 200
-    token = response.json()["access_token"]
-    assert UUID(str(decode_access_token(token)))
-    assert response.json()["token_type"] == "bearer"
-    assert "refresh_token" not in response.json()
+    body = response.json()
+    app_token = body["access_token"]
+    matrix_session = body["matrix"]
+    assert UUID(str(decode_access_token(app_token)))
+    assert body["token_type"] == "bearer"
+    assert "refresh_token" not in body
+    assert matrix_session["access_token"].startswith("matrix-")
+    assert matrix_session["user_id"].startswith("@u_")
+    assert matrix_session["device_id"]
+    assert "password" not in body
+
+    bridge_token, expected_user_id = matrix_client.login_requests[0]
+    bridge_claims = jwt.decode(
+        bridge_token,
+        settings.synapse_jwt_signing_key.get_secret_value(),
+        algorithms=[settings.synapse_jwt_algorithm],
+        issuer=settings.synapse_jwt_issuer,
+        audience=settings.synapse_jwt_audience,
+    )
+    assert bridge_token not in response.text
+    assert settings.synapse_jwt_signing_key.get_secret_value() not in response.text
+    assert bridge_claims["sub"] == matrix_session["user_id"].split(":", 1)[0][1:]
+    assert (
+        bridge_claims["exp"] - bridge_claims["iat"]
+        == settings.synapse_jwt_ttl_seconds
+    )
+    assert expected_user_id == matrix_session["user_id"]
+    assert bridge_claims["display_name"] == "Alice Example"
+    assert "password" not in bridge_claims
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.decode(
+            bridge_token,
+            settings.app_jwt_signing_key.get_secret_value(),
+            algorithms=[settings.app_jwt_algorithm],
+            options={"verify_exp": False, "verify_aud": False, "verify_iss": False},
+        )
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.decode(
+            app_token,
+            settings.synapse_jwt_signing_key.get_secret_value(),
+            algorithms=[settings.synapse_jwt_algorithm],
+            options={"verify_exp": False, "verify_aud": False, "verify_iss": False},
+        )
+
     cookie = response.headers["set-cookie"].casefold()
     assert "httponly" in cookie
     assert "samesite=strict" in cookie
     assert client.cookies.get("app_refresh")
 
 
-def test_invalid_login_is_generic_and_rate_limited_by_ip(client: ApiClient) -> None:
+def test_two_app_users_get_distinct_synapse_sessions_without_matrix_passwords(
+    client: ApiClient,
+    matrix_client,
+) -> None:
+    register(client, "alice_example")
+    register(client, "bob_example")
+
+    alice = login(client, "alice_example")
+    bob = login(client, "bob_example")
+
+    assert alice.status_code == bob.status_code == 200
+    alice_matrix = alice.json()["matrix"]
+    bob_matrix = bob.json()["matrix"]
+    assert alice_matrix["user_id"] != bob_matrix["user_id"]
+    assert alice_matrix["access_token"] != bob_matrix["access_token"]
+    assert len(matrix_client.login_requests) == 2
+
+    alice_claims = jwt.decode(
+        matrix_client.login_requests[0][0],
+        settings.synapse_jwt_signing_key.get_secret_value(),
+        algorithms=[settings.synapse_jwt_algorithm],
+        issuer=settings.synapse_jwt_issuer,
+        audience=settings.synapse_jwt_audience,
+    )
+    bob_claims = jwt.decode(
+        matrix_client.login_requests[1][0],
+        settings.synapse_jwt_signing_key.get_secret_value(),
+        algorithms=[settings.synapse_jwt_algorithm],
+        issuer=settings.synapse_jwt_issuer,
+        audience=settings.synapse_jwt_audience,
+    )
+    assert alice_claims["sub"] != bob_claims["sub"]
+    assert "password" not in alice_claims
+    assert "password" not in bob_claims
+
+
+def test_synapse_failure_does_not_issue_app_refresh_session(
+    client: ApiClient,
+    matrix_client,
+    db_session,
+) -> None:
+    register(client)
+    matrix_client.fail_login = True
+
+    response = login(client)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Matrix authentication is temporarily unavailable"
+    }
+    assert client.cookies.get("app_refresh") is None
+    assert db_session.query(RefreshToken).count() == 0
+
+
+def test_invalid_login_is_generic_and_rate_limited_by_ip(
+    client: ApiClient,
+    matrix_client,
+) -> None:
     register(client)
     wrong_password = client.post(
         "/api/v1/auth/login",
@@ -115,6 +216,7 @@ def test_invalid_login_is_generic_and_rate_limited_by_ip(client: ApiClient) -> N
     assert wrong_password.json() == unknown_user.json()
 
     login_rate_limiter.clear()
+    assert matrix_client.login_requests == []
     monkeypatch_limit = settings.app_login_rate_limit_attempts
     try:
         settings.app_login_rate_limit_attempts = 1
@@ -164,6 +266,7 @@ def test_refresh_rotates_token_and_reuse_revokes_the_family(client: ApiClient) -
     rotated = client.post("/api/v1/auth/refresh")
     new_refresh = rotated.cookies.get("app_refresh")
     assert rotated.status_code == 200
+    assert "matrix" not in rotated.json()
     assert new_refresh is not None and new_refresh != old_refresh
 
     with ApiClient(client.app) as replay_client:
@@ -175,12 +278,41 @@ def test_refresh_rotates_token_and_reuse_revokes_the_family(client: ApiClient) -
     assert after_reuse.status_code == 401
 
 
-def test_logout_revokes_refresh_family(client: ApiClient) -> None:
+def test_logout_revokes_app_and_matrix_sessions(
+    client: ApiClient,
+    matrix_client,
+) -> None:
     register(client)
-    login(client)
+    session = login(client).json()["matrix"]
     refresh_value = client.cookies.get("app_refresh")
     assert refresh_value is not None
-    logout = client.post("/api/v1/auth/logout")
+    logout = client.post(
+        "/api/v1/auth/logout",
+        json={"matrix_access_token": session["access_token"]},
+    )
+    with ApiClient(client.app) as refresh_client:
+        refresh_client.cookies.set("app_refresh", refresh_value)
+        refresh = refresh_client.post("/api/v1/auth/refresh")
+
+    assert logout.status_code == 204
+    assert refresh.status_code == 401
+    assert matrix_client.logout_tokens == [session["access_token"]]
+
+
+def test_app_logout_succeeds_when_synapse_is_unavailable(
+    client: ApiClient,
+    matrix_client,
+) -> None:
+    register(client)
+    session = login(client).json()["matrix"]
+    refresh_value = client.cookies.get("app_refresh")
+    assert refresh_value is not None
+
+    matrix_client.fail_logout = True
+    logout = client.post(
+        "/api/v1/auth/logout",
+        json={"matrix_access_token": session["access_token"]},
+    )
     with ApiClient(client.app) as refresh_client:
         refresh_client.cookies.set("app_refresh", refresh_value)
         refresh = refresh_client.post("/api/v1/auth/refresh")

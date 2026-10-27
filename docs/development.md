@@ -9,8 +9,8 @@ dependencies are pinned in `backend/requirements.txt`. The checked-in
 Synapse config/signing key, database credentials, and data out of Git.
 
 Do not overwrite `.env` when adding backend settings. Run
-`scripts/setup/prepare-backend-env.py` to add app-only secrets while preserving
-the existing Synapse settings.
+`scripts/setup/prepare-backend-env.py` to add application settings and ensure a
+separate FastAPI-to-Synapse JWT key while preserving local database credentials.
 
 ## Backend Development
 

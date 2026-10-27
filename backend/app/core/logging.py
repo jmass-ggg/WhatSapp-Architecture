@@ -7,7 +7,10 @@ from datetime import UTC, datetime
 
 
 _SECRET_PATTERN = re.compile(
-    r"(?i)\b(password|access[_-]?token|refresh[_-]?token|authorization|secret)\b"
+    r"(?i)\b("
+    r"[\w-]*(?:password|token|access[_-]?token|refresh[_-]?token|"
+    r"authorization|secret|signing[_-]?key)"
+    r")\b"
     r"([\"']?\s*[:=]\s*)"
     r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|(?:bearer\s+)?[^\s,;]+)"
 )

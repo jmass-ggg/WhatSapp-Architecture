@@ -8,6 +8,16 @@ allow_guest_access: false
 federation_domain_whitelist: []
 trusted_key_servers: []
 
+jwt_config:
+  enabled: true
+  secret: REPLACE_WITH_LOCAL_SYNAPSE_JWT_SIGNING_KEY
+  algorithm: HS256
+  subject_claim: sub
+  display_name_claim: display_name
+  issuer: realtime-chat-synapse-login
+  audiences:
+    - realtime-chat-synapse
+
 listeners:
   - port: 8008
     tls: false

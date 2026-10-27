@@ -2,12 +2,12 @@
 
 ## Overview
 
-The target browser will be both an application client and a Matrix client.
-React will use FastAPI for application-owned identity/profile metadata and
-business rules, while the Matrix JavaScript SDK will talk directly to Synapse
-for conversations and client-side encryption. The current implementation
-provides the FastAPI identity/profile/access API and a narrow Synapse versions
-diagnostic; the React client and Matrix messaging flows are future work.
+The browser is both an application client and a Matrix client. React uses
+FastAPI for application-owned identity/profile metadata and business rules,
+while the Matrix JavaScript SDK talks directly to Synapse for conversations
+and client-side encryption. FastAPI login now exchanges a short-lived,
+server-only JWT with Synapse and returns Synapse's Matrix session to the
+browser. The React client and Matrix messaging flows are future work.
 
 ```mermaid
 flowchart LR
@@ -23,7 +23,8 @@ flowchart LR
     MatrixSDK -->|"Matrix Client-Server API + Matrix token"| Synapse["Synapse"]
     FastAPI -->|"Application records"| AppDB[("PostgreSQL: chat_app")]
     Synapse -->|"Homeserver records"| SynapseDB[("PostgreSQL: synapse")]
-    FastAPI -.->|"Versions diagnostic only today"| Synapse
+    FastAPI -->|"Short-lived JWT login assertion"| Synapse
+    Synapse -->|"Matrix session from unified login"| FastAPI
     IdP["Future OIDC identity provider"] -.->|"Separate client flows"| FastAPI
     IdP -.->|"Synapse OIDC, future"| Synapse
 
@@ -48,8 +49,8 @@ port is not published to the host.
 | Component | Owns |
 | --- | --- |
 | React frontend | Planned authentication screens, one-to-one/group chat views, message history, typing/receipt display, attachments, and encryption UX. Not implemented in this backend step. |
-| Matrix JavaScript SDK (planned: `matrix-js-sdk`) | Will own Matrix login/session operations, sync, rooms/events, typing, receipts, media API calls, device keys, encryption/decryption, and encrypted attachments. |
-| FastAPI | Implemented app registration/login, JWT and refresh sessions, user/profile APIs, directory visibility, configurable entitlements, health checks, and a versions-only Synapse diagnostic. Account provisioning/linking is not implemented. |
+| Matrix JavaScript SDK (planned: `matrix-js-sdk`) | Owns Matrix session storage, sync, rooms/events, typing, receipts, media API calls, device keys, encryption/decryption, and encrypted attachments. |
+| FastAPI | Owns app registration/login, app JWT and refresh sessions, user/profile APIs, directory visibility, configurable entitlements, and the narrow Synapse JWT login/logout exchange. |
 | Synapse | Matrix users/devices; room membership/state; message delivery and history; synchronization; typing and receipt events; Matrix authentication; media repository/API; federation if explicitly enabled. |
 | PostgreSQL | Separate Synapse and FastAPI containers, databases, non-superuser app roles, private networks, and persistent volumes. |
 | Benchmark tooling | Planned repeatable 50-, 100-, and 500-user scenarios and reporting for latency, throughput, errors, CPU, and memory. No capacity claim is made here. |
@@ -60,28 +61,28 @@ Synapse is the source of truth for Matrix data.
 
 ## Communication and Event Flow
 
-1. The browser calls FastAPI for app authentication, profiles, directory, and
-   entitlements.
-2. When the Matrix client is implemented, its SDK will authenticate separately
-   with Synapse and start Matrix sync.
-3. The SDK will submit messages to Synapse; Synapse will persist and route
+1. The browser sends the application username/email and password to FastAPI.
+2. FastAPI validates the app password, signs a 60-second JWT with the dedicated
+   FastAPI-to-Synapse key, and submits it to Synapse's JWT login flow.
+3. Synapse maps the stable app-user UUID to a Matrix localpart, creates that
+   Matrix account on first login, and returns its own Matrix access token.
+4. The browser uses the app JWT only with FastAPI and the Matrix access token
+   only with the Matrix SDK. The SDK starts Matrix sync.
+5. The SDK submits messages to Synapse; Synapse persists and routes
    events to other clients' sync streams.
-4. Typing notifications and read receipts will use Matrix APIs, not duplicate
+6. Typing notifications and read receipts use Matrix APIs, not duplicate
    FastAPI state.
-5. The current FastAPI integration calls only Synapse's versions endpoint. It
-   does not proxy ordinary client Matrix traffic.
+7. Logout revokes the app refresh-token family and, when the browser supplies
+   its Matrix access token, asks Synapse to revoke that device session.
 
 ## Authentication Boundaries
 
-The current prototype uses app-owned username/email and password authentication
-for FastAPI. Matrix login is not integrated. A future SSO design may use an OIDC
-identity provider with separate FastAPI and Synapse client/audience flows; the
-identity-provider `iss` and stable `sub` claims can then provide an explicit
-account-link key.
-
-An application JWT is not a Matrix access token and is never sent to Synapse.
-A Synapse admin credential, if needed for provisioning, stays server-side and
-must not be sent to the browser. See [Authentication](authentication.md) and
+The user enters one application password. FastAPI validates it and creates a
+separate short-lived JWT assertion for Synapse. The assertion uses a dedicated
+key, issuer, and audience; it is never returned to the browser. Synapse issues
+the Matrix access token, and the two access tokens remain valid only for their
+respective APIs. Synapse registration through ordinary client requests remains
+disabled. See [Authentication](authentication.md) and
 [API Boundaries](api-boundaries.md).
 
 ## Database Ownership and Network

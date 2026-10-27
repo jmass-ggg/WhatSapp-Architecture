@@ -28,8 +28,9 @@ The project uses `SYNAPSE_SERVER_NAME=localhost` for development. Treat this as
 immutable after creating users or rooms; changing the server name later changes
 Matrix IDs and requires a migration.
 
-1. Generate a local `.env` with independent random database passwords and
-   create the initial Synapse config, signing key, and logging config:
+1. Generate a local `.env` with independent random database passwords and a
+   dedicated FastAPI-to-Synapse JWT key, then create the initial Synapse
+   config, signing key, and logging config:
 
    ```sh
    ./scripts/setup/prepare-synapse.sh
@@ -52,8 +53,30 @@ configuration under `/data`; this project bind-mounts that path to
 `synapse/config/`. A separate named volume stores media. The setup script
 applies local-only settings from the sanitized template, including the
 `psycopg2` database block, disabled registration and guests, no trusted key
-servers, and a client-only listener. PostgreSQL's init script creates the
-dedicated role and a UTF-8 database using `C` collation/ctype from `template0`.
+servers, a client-only listener, and the JWT login provider. The JWT signing
+key is shared only between FastAPI and Synapse; it is separate from
+`APP_JWT_SIGNING_KEY`. PostgreSQL's init script creates the dedicated role and
+a UTF-8 database using `C` collation/ctype from `template0`.
+
+## Updating an Existing Local Configuration
+
+For a checkout created before the JWT login integration, preserve its `.env`
+and generated Synapse identity. Add the bridge key if it is missing, rewrite
+the generated config with the current settings, and recreate the services:
+
+```sh
+backend/.venv/bin/python scripts/setup/prepare-backend-env.py
+docker compose -f compose.synapse.yaml run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/scripts/setup/configure-synapse.py:/configure-synapse.py:ro" \
+  --entrypoint python synapse /configure-synapse.py
+docker compose -f compose.synapse.yaml up -d --force-recreate synapse
+docker compose -f compose.backend.yaml up -d --build backend
+```
+
+The helper preserves existing database passwords and strong signing keys. The
+configuration update is idempotent and does not replace Synapse's signing key
+or database.
 
 ## Start, Stop, and Logs
 
@@ -93,6 +116,7 @@ the dedicated Synapse database; Synapse waits for that health check and uses
 
 ```sh
 curl -i http://127.0.0.1:8008/_matrix/client/versions
+curl -i http://127.0.0.1:8008/_matrix/client/v3/login
 curl -i http://127.0.0.1:8008/health
 docker compose -f compose.synapse.yaml exec postgres \
   psql -U synapse -d synapse \

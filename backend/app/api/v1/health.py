@@ -8,16 +8,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_matrix_client
 from app.core.database import check_database, get_db
 from app.integrations.matrix.client import MatrixClient, MatrixConnectionError
 
 
 logger = logging.getLogger("app.health")
 router = APIRouter(prefix="/health", tags=["health"])
-
-
-def get_matrix_client() -> MatrixClient:
-    return MatrixClient()
 
 
 @router.get("")

@@ -42,8 +42,26 @@ class Settings(BaseSettings):
     app_login_rate_limit_attempts: int = Field(default=10, ge=1, le=100)
     app_login_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
 
+    synapse_server_name: str = Field(
+        default="localhost",
+        min_length=1,
+        max_length=255,
+    )
     synapse_internal_url: str = "http://synapse:8008"
     synapse_request_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    synapse_jwt_issuer: str = Field(
+        default="realtime-chat-synapse-login",
+        min_length=1,
+        max_length=200,
+    )
+    synapse_jwt_audience: str = Field(
+        default="realtime-chat-synapse",
+        min_length=1,
+        max_length=200,
+    )
+    synapse_jwt_algorithm: Literal["HS256"] = "HS256"
+    synapse_jwt_ttl_seconds: int = Field(default=60, ge=15, le=300)
+    synapse_jwt_signing_key: SecretStr
 
     app_plan_entitlements: dict[str, list[str]] = Field(
         default_factory=lambda: {
@@ -75,6 +93,11 @@ class Settings(BaseSettings):
             raise ValueError("The application and test databases must be distinct")
         if len(self.app_jwt_signing_key.get_secret_value().encode("utf-8")) < 32:
             raise ValueError("APP_JWT_SIGNING_KEY must contain at least 32 bytes")
+        synapse_signing_key = self.synapse_jwt_signing_key.get_secret_value()
+        if len(synapse_signing_key.encode("utf-8")) < 32:
+            raise ValueError("SYNAPSE_JWT_SIGNING_KEY must contain at least 32 bytes")
+        if synapse_signing_key == self.app_jwt_signing_key.get_secret_value():
+            raise ValueError("Application and Synapse JWT signing keys must be different")
         if self.app_env == "production":
             if self.app_registration_enabled:
                 raise ValueError("Public registration must be disabled in production")

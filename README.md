@@ -1,10 +1,10 @@
 # Realtime Chat Prototype
 
 Development workspace for a Matrix Synapse, FastAPI, React, and PostgreSQL
-chat application. The local Synapse service and the application identity,
-profile, directory, and access-control API are implemented. The React client,
-Matrix messaging UI, OIDC, media workflows, and E2EE client are not part of
-this backend step.
+chat application. The local Synapse service, FastAPI identity/profile and
+access-control APIs, and unified app-password-to-Matrix login are implemented.
+The React client, Matrix messaging UI, OIDC, media workflows, and E2EE client
+are not part of this backend step.
 
 ## Architecture and Boundaries
 
@@ -24,7 +24,7 @@ database publishes port 5432 to the host.
 
 The existing `.env` is local-only and must retain the generated Synapse values.
 On first setup, use the Synapse preparation instructions before running the
-app-only environment helper:
+backend environment helper:
 
 ```sh
 backend/.venv/bin/python scripts/setup/prepare-backend-env.py
@@ -35,9 +35,13 @@ docker compose -f compose.backend.yaml up -d backend
 ```
 
 The helper writes random app database and JWT secrets to the ignored `.env`;
-it does not print or replace Synapse credentials. Development registration is
-enabled by that helper for local verification. The committed `.env.example`
-keeps registration disabled.
+the app JWT key and FastAPI-to-Synapse bridge key are generated separately.
+The helper does not print or replace Synapse database credentials. Development
+registration is enabled by that helper for local verification. The committed
+`.env.example` keeps registration disabled.
+For an existing checkout created before unified login, also follow the
+configuration update steps in [Local Synapse setup](docs/synapse-setup.md)
+before testing Matrix login.
 
 The API is loopback-published on port 8000. Use `http://localhost:8000` from a
 browser with the frontend at `http://localhost:5173`, keeping the hostname
