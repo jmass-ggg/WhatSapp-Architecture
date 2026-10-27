@@ -1,0 +1,98 @@
+name: realtime-chat-synapse
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_IMAGE_TAG:-16.15}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?Set POSTGRES_SUPERUSER_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-postgres}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      SYNAPSE_DATABASE_NAME: ${SYNAPSE_DATABASE_NAME:-synapse}
+      SYNAPSE_DATABASE_USER: ${SYNAPSE_DATABASE_USER:-synapse}
+      SYNAPSE_DATABASE_PASSWORD: ${SYNAPSE_DATABASE_PASSWORD:?Set SYNAPSE_DATABASE_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init/10-create-synapse-db.sh:/docker-entrypoint-initdb.d/10-create-synapse-db.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD="$${SYNAPSE_DATABASE_PASSWORD}"
+          psql -h 127.0.0.1 -U "$${SYNAPSE_DATABASE_USER}"
+          -d "$${SYNAPSE_DATABASE_NAME}" -tAc 'SELECT 1' | grep -qx 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - synapse_internal
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  synapse:
+    image: ghcr.io/element-hq/synapse:${SYNAPSE_IMAGE_TAG:-v1.163.2}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME:-localhost}
+      SYNAPSE_REPORT_STATS: "no"
+      SYNAPSE_HTTP_PORT: ${SYNAPSE_HTTP_PORT:-8008}
+      SYNAPSE_NO_TLS: "yes"
+      SYNAPSE_LOG_LEVEL: ${SYNAPSE_LOG_LEVEL:-INFO}
+      SYNAPSE_CONFIG_DIR: /data
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+      SYNAPSE_DATA_DIR: /data
+      SYNAPSE_PUBLIC_URL: ${SYNAPSE_PUBLIC_URL:-http://127.0.0.1:8008}
+      SYNAPSE_DATABASE_NAME: ${SYNAPSE_DATABASE_NAME:-synapse}
+      SYNAPSE_DATABASE_USER: ${SYNAPSE_DATABASE_USER:-synapse}
+      SYNAPSE_DATABASE_PASSWORD: ${SYNAPSE_DATABASE_PASSWORD:?Set SYNAPSE_DATABASE_PASSWORD in .env}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      UID: ${LOCAL_UID:-1000}
+      GID: ${LOCAL_GID:-1000}
+    volumes:
+      - ./synapse/config:/data
+      - synapse_media:/data/media_store
+    ports:
+      - "127.0.0.1:${SYNAPSE_HOST_PORT:-8008}:8008"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:8008/health
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - synapse_internal
+      - synapse_client
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  synapse_internal:
+    name: realtime-chat-synapse-internal
+    driver: bridge
+    internal: true
+  synapse_client:
+    name: realtime-chat-synapse-client
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: realtime-chat-synapse-postgres-data
+  synapse_media:
+    name: realtime-chat-synapse-media

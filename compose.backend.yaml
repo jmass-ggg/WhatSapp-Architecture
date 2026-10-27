@@ -1,0 +1,108 @@
+name: realtime-chat-backend
+
+services:
+  app-postgres:
+    image: postgres:${APP_POSTGRES_IMAGE_TAG:-16.15}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${APP_DATABASE_NAME:-chat_app}
+      POSTGRES_USER: ${APP_DATABASE_ADMIN_USER:-chat_app_admin}
+      POSTGRES_PASSWORD: ${APP_DATABASE_ADMIN_PASSWORD:?Set APP_DATABASE_ADMIN_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+      APP_DATABASE_NAME: ${APP_DATABASE_NAME:-chat_app}
+      APP_DATABASE_USER: ${APP_DATABASE_USER:-chat_app}
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:?Set APP_DATABASE_PASSWORD in .env}
+      APP_TEST_DATABASE_NAME: ${APP_TEST_DATABASE_NAME:-chat_app_test}
+    volumes:
+      - app_postgres_data:/var/lib/postgresql/data
+      - ./database/init/20-create-app-test-db.sh:/docker-entrypoint-initdb.d/20-create-app-test-db.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD="$${APP_DATABASE_PASSWORD}"
+          psql -h 127.0.0.1 -U "$${APP_DATABASE_USER}" -d "$${APP_DATABASE_NAME}"
+          -tAc "SELECT 1 FROM pg_roles WHERE rolname = current_user AND NOT rolsuper"
+          | grep -qx 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - app_internal
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: realtime-chat-backend:dev
+    restart: unless-stopped
+    environment:
+      APP_NAME: "${APP_NAME:-Realtime Chat Prototype}"
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FASTAPI_HOST: 0.0.0.0
+      FASTAPI_PORT: 8000
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      APP_DATABASE_HOST: app-postgres
+      APP_DATABASE_PORT: 5432
+      APP_DATABASE_NAME: ${APP_DATABASE_NAME:-chat_app}
+      APP_TEST_DATABASE_NAME: ${APP_TEST_DATABASE_NAME:-chat_app_test}
+      APP_DATABASE_USER: ${APP_DATABASE_USER:-chat_app_app}
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:?Set APP_DATABASE_PASSWORD in .env}
+      APP_DATABASE_POOL_SIZE: ${APP_DATABASE_POOL_SIZE:-5}
+      APP_DATABASE_MAX_OVERFLOW: ${APP_DATABASE_MAX_OVERFLOW:-5}
+      APP_REGISTRATION_ENABLED: ${APP_REGISTRATION_ENABLED:-false}
+      APP_JWT_ISSUER: ${APP_JWT_ISSUER:-realtime-chat-api}
+      APP_JWT_AUDIENCE: ${APP_JWT_AUDIENCE:-realtime-chat-api}
+      APP_JWT_ALGORITHM: ${APP_JWT_ALGORITHM:-HS256}
+      APP_JWT_TTL_SECONDS: ${APP_JWT_TTL_SECONDS:-900}
+      APP_JWT_SIGNING_KEY: ${APP_JWT_SIGNING_KEY:?Set APP_JWT_SIGNING_KEY in .env}
+      APP_REFRESH_TOKEN_TTL_SECONDS: ${APP_REFRESH_TOKEN_TTL_SECONDS:-2592000}
+      APP_REFRESH_COOKIE_SECURE: ${APP_REFRESH_COOKIE_SECURE:-false}
+      APP_LOGIN_RATE_LIMIT_ATTEMPTS: ${APP_LOGIN_RATE_LIMIT_ATTEMPTS:-10}
+      APP_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${APP_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
+      APP_PLAN_ENTITLEMENTS: '${APP_PLAN_ENTITLEMENTS:?Set APP_PLAN_ENTITLEMENTS in .env}'
+      SYNAPSE_INTERNAL_URL: http://synapse:8008
+      SYNAPSE_REQUEST_TIMEOUT_SECONDS: ${SYNAPSE_REQUEST_TIMEOUT_SECONDS:-3.0}
+    depends_on:
+      app-postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FASTAPI_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - app_internal
+      - synapse_client
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  app_internal:
+    name: realtime-chat-backend-internal
+    driver: bridge
+    internal: true
+  synapse_client:
+    name: realtime-chat-synapse-client
+    external: true
+
+volumes:
+  app_postgres_data:
+    name: realtime-chat-backend-postgres-data

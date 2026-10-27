@@ -1,0 +1,38 @@
+# Sanitized local template. The generated synapse/config/homeserver.yaml is
+# authoritative at runtime and is intentionally ignored by Git.
+server_name: localhost
+public_baseurl: http://127.0.0.1:8008/
+report_stats: false
+enable_registration: false
+allow_guest_access: false
+federation_domain_whitelist: []
+trusted_key_servers: []
+
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: false
+    bind_addresses:
+      - 0.0.0.0
+    resources:
+      - names:
+          - client
+        compress: false
+
+database:
+  name: psycopg2
+  args:
+    user: synapse
+    password: REPLACE_WITH_LOCAL_SYNAPSE_DATABASE_PASSWORD
+    database: synapse
+    host: postgres
+    port: 5432
+    cp_min: 5
+    cp_max: 10
+
+media_store_path: /data/media_store
+signing_key_path: /data/localhost.signing.key
+macaroon_secret_key: REPLACE_WITH_GENERATED_LOCAL_SECRET
+form_secret: REPLACE_WITH_GENERATED_LOCAL_SECRET
+log_config: /data/localhost.log.config

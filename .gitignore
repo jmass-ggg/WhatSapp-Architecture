@@ -1,0 +1,49 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/secrets/
+**/credentials/
+**/*secrets*
+**/*credentials*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated Synapse configuration contains secrets and the server signing key
+/synapse/config/*
+!/synapse/config/.gitkeep
+/synapse/media_store/
+
+# Python
+**/.venv/
+**/venv/
+/backend/wheelhouse/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# JavaScript
+**/node_modules/
+**/dist/
+**/.vite/
+
+# Generated data, coverage, and logs
+*.log
+*.sqlite3
+*.db
+coverage/
+htmlcov/
+scripts/benchmark/reports/*
+!scripts/benchmark/reports/.gitkeep
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
