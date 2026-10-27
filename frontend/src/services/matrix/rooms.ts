@@ -16,7 +16,9 @@ function timelineMessages(room: Room, ownUserId: string): Message[] {
     if (!message) continue;
     byEventId.set(message.id, message);
   }
-  return [...byEventId.values()].slice(-100);
+  return [...byEventId.values()]
+    .sort((left, right) => left.sentAt.getTime() - right.sentAt.getTime())
+    .slice(-100);
 }
 
 function latestVisibleEvent(room: Room): MatrixEvent | undefined {
@@ -48,6 +50,7 @@ export function conversationFromMatrixRoom(
   const isEncrypted = room.hasEncryptionStateEvent();
   const typing = members.some((member) => member.typing);
   const lastEvent = latestVisibleEvent(room);
+  const lastActivity = lastEvent?.getTs() ?? room.getLastActiveTimestamp();
 
   return {
     id: room.roomId,
@@ -70,7 +73,9 @@ export function conversationFromMatrixRoom(
       (isEncrypted && lastEvent ? "Encrypted message" : "Start a conversation"),
     updatedAt:
       latest?.sentAt ??
-      new Date(lastEvent?.getTs() || room.getLastActiveTimestamp() || 0),
+      new Date(Number.isFinite(lastActivity) && Math.abs(lastActivity) <= 8.64e15
+        ? lastActivity
+        : 0),
     unreadCount: room.getUnreadNotificationCount() ?? 0,
     messages,
     bio:
@@ -88,7 +93,7 @@ export function conversationsFromMatrixClient(
   ownUserId: string,
 ): Conversation[] {
   return rooms
-    .filter((room) => room.getMyMembership() === "join")
+    .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
     .map((room) => conversationFromMatrixRoom(room, ownUserId))
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }

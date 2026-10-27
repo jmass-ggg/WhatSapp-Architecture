@@ -326,7 +326,9 @@ export function MatrixSecurityDialog({
                 </button>
               </div>
             )}
-            {(snapshot.keyBackupStatus === "trusted" || snapshot.secretStorageReady === false) && (
+            {(snapshot.keyBackupStatus === "trusted" ||
+              snapshot.keyBackupStatus === "untrusted" ||
+              snapshot.secretStorageReady === false) && (
               <div className="recovery-restore">
                 <label htmlFor="matrix-recovery-key">Restore on this device</label>
                 <input

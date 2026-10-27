@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { AppLayout } from "../layouts/AppLayout";
@@ -49,17 +49,25 @@ export function ChatPage() {
   const [mutedIds, setMutedIds] = useState<Set<string>>(() => new Set());
   const [wallpaperIds, setWallpaperIds] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [joiningRoom, setJoiningRoom] = useState(false);
+  const lastReadReceipt = useRef("");
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
 
   const matrix = useMatrixRooms();
   const matrixContext = useMatrixContext();
   const conversations =
     mode === "demo" ? demoConversations : mode === "live" ? matrix.rooms : [];
   const selectedConversation =
-    conversations.find((conversation) => conversation.id === conversationId) ??
-    conversations[0] ??
+    (conversationId
+      ? conversations.find((conversation) => conversation.id === conversationId)
+      : mode === "demo" ? conversations[0] : null) ??
     null;
   const mobileDetailOpen = Boolean(conversationId && selectedConversation);
   const selectedId = selectedConversation?.id;
+  const selectedRoom = mode === "live" && selectedId
+    ? matrixContext.client?.getRoom(selectedId)
+    : null;
+  const isInvited = selectedRoom?.getMyMembership() === "invite";
 
   const dismissToast = useCallback(() => setToast(null), []);
   const notify = useCallback((message: string, kind: ToastState["kind"] = "info") => {
@@ -70,19 +78,9 @@ export function ChatPage() {
     if (conversationId && conversations.length > 0 && !selectedConversation && mode === "demo") {
       navigate("/chat", { replace: true });
     }
-    if (
-      conversationId &&
-      mode === "live" &&
-      matrix.initialSyncComplete &&
-      conversations.length > 0 &&
-      !selectedConversation
-    ) {
-      navigate("/chat", { replace: true });
-    }
   }, [
     conversationId,
     conversations.length,
-    matrix.initialSyncComplete,
     mode,
     navigate,
     selectedConversation,
@@ -100,6 +98,46 @@ export function ChatPage() {
     },
     [navigate],
   );
+
+  useEffect(() => {
+    const onVisibilityChange = () => setPageVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "live" || !selectedConversation || isInvited ||
+      !pageVisible ||
+      (!conversationId && window.matchMedia("(max-width: 767px)").matches)) return;
+    const client = matrixContext.client;
+    const room = client?.getRoom(selectedConversation.id);
+    if (!client || !room || room.getMyMembership() !== "join") return;
+    const lastIncoming = [...room.getLiveTimeline().getEvents()].reverse().find(
+      (event) => event.getSender() !== client.getUserId() &&
+        event.getId() && event.getType() === "m.room.message" &&
+        !event.isDecryptionFailure(),
+    );
+    if (lastIncoming && selectedConversation.unreadCount > 0) {
+      const receiptKey = `${client.getUserId()}:${selectedConversation.id}:${lastIncoming.getId()}`;
+      if (lastReadReceipt.current === receiptKey) return;
+      lastReadReceipt.current = receiptKey;
+      void client.sendReadReceipt(lastIncoming).catch(() => {
+        if (lastReadReceipt.current === receiptKey) lastReadReceipt.current = "";
+      });
+    }
+  }, [conversationId, isInvited, matrixContext.client, mode, pageVisible, selectedConversation]);
+
+  const acceptInvitation = useCallback(async () => {
+    if (!matrixContext.client || !selectedId) return;
+    setJoiningRoom(true);
+    try {
+      await matrixContext.client.joinRoom(selectedId);
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : "Could not join the conversation.", "error");
+    } finally {
+      setJoiningRoom(false);
+    }
+  }, [matrixContext.client, notify, selectedId]);
 
   const sendMessage = useCallback(
     async (text: string, file?: File) => {
@@ -340,6 +378,15 @@ export function ChatPage() {
             </div>
           )}
 
+          {isInvited && (
+            <div className="mode-banner" role="status">
+              <span>Invitation to this conversation</span>
+              <button type="button" className="primary-button" onClick={() => void acceptInvitation()} disabled={joiningRoom}>
+                {joiningRoom ? "Joining…" : "Accept invitation"}
+              </button>
+            </div>
+          )}
+
           {searchOpen && selectedConversation && (
             <div className="message-search-row">
               <SearchInput
@@ -378,16 +425,19 @@ export function ChatPage() {
             <MessageComposer
               disabled={
                 mode === "live" &&
-                (!selectedConversation.isEncrypted ||
-                  matrix.cryptoStatus !== "ready")
+                (isInvited || !selectedConversation.isEncrypted ||
+                  matrix.cryptoStatus !== "ready" ||
+                  matrixContext.crossSigningReady !== true)
               }
               attachmentsDisabled={mode === "live"}
               busy={false}
               placeholder={
                 selectedConversation.isEncrypted
-                  ? matrix.cryptoStatus === "ready"
-                    ? "Write an end-to-end encrypted message…"
-                    : "Encryption is not ready"
+                  ? matrix.cryptoStatus !== "ready"
+                    ? "Encryption is not ready"
+                    : matrixContext.crossSigningReady !== true
+                      ? "Set up cross-signing to send"
+                      : "Write an end-to-end encrypted message…"
                   : mode === "demo"
                   ? "Write a demo message…"
                   : "This room is not encrypted"
@@ -395,7 +445,11 @@ export function ChatPage() {
               hint={
                 mode === "live"
                   ? selectedConversation.isEncrypted
-                    ? "Messages are encrypted on this device before they reach Synapse."
+                    ? matrix.cryptoStatus !== "ready"
+                      ? "Encrypted sending is unavailable until Rust crypto is ready."
+                      : matrixContext.crossSigningReady !== true
+                        ? "Set up secure recovery and cross-signing in Encryption and devices before sending."
+                        : "Messages are encrypted on this device before they reach Synapse."
                     : "This existing room is plaintext. Create a new encrypted room to send messages."
                   : undefined
               }

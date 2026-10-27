@@ -37,11 +37,23 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
   } = useMatrixContext();
 
   const createDirect = useCallback(
-    async (_userId: string, displayName: string, matrixUserId: string) => {
+    async (_userId: string, _displayName: string, matrixUserId: string) => {
       if (!client) throw new Error("Sign in to start a conversation.");
+      const existing = client.getRooms().find((room) =>
+        (room.getMyMembership() === "join" || room.getMyMembership() === "invite") &&
+        room.hasEncryptionStateEvent() &&
+        room.getMembers().some((member) =>
+          member.userId === matrixUserId &&
+          (member.membership === "join" || member.membership === "invite"),
+        ) &&
+        room.getMembers().filter((member) =>
+          member.userId !== client.getUserId() &&
+          (member.membership === "join" || member.membership === "invite"),
+        ).length === 1,
+      );
+      if (existing) return existing.roomId;
       return createEncryptedRoom(client, {
         invitees: [matrixUserId],
-        name: displayName,
         isDirect: true,
       });
     },

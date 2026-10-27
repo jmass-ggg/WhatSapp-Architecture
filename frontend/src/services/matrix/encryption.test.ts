@@ -14,16 +14,19 @@ function mockClient({
   hasEncryptionState = true,
   rustCrypto = true,
   sdkEncryptionReady = true,
+  crossSigningReady = true,
   algorithm = MATRIX_ROOM_ENCRYPTION_ALGORITHM,
 }: {
   hasEncryptionState?: boolean;
   rustCrypto?: boolean;
   sdkEncryptionReady?: boolean;
+  crossSigningReady?: boolean;
   algorithm?: string;
 } = {}) {
   const createRoom = vi.fn(async () => ({ room_id: roomId }));
   const sendTextMessage = vi.fn(async () => ({ event_id: "$encrypted:localhost" }));
   const crypto = {
+    isCrossSigningReady: vi.fn(async () => crossSigningReady),
     isEncryptionEnabledInRoom: vi.fn(async () => sdkEncryptionReady),
   };
   const client = {
@@ -94,8 +97,20 @@ describe("Matrix encrypted room and message operations", () => {
       sendEncryptedTextMessage(client, roomId, "synthetic message"),
     ).resolves.toEqual({ event_id: "$encrypted:localhost" });
 
+    expect(crypto.isCrossSigningReady).toHaveBeenCalledOnce();
     expect(crypto.isEncryptionEnabledInRoom).toHaveBeenCalledWith(roomId);
     expect(sendTextMessage).toHaveBeenCalledWith(roomId, "synthetic message");
+  });
+
+  it("blocks sending until cross-signing is ready", async () => {
+    const { client, sendTextMessage } = mockClient({
+      crossSigningReady: false,
+    });
+
+    await expect(
+      sendEncryptedTextMessage(client, roomId, "synthetic message"),
+    ).rejects.toThrow(/Cross-signing is not set up/);
+    expect(sendTextMessage).not.toHaveBeenCalled();
   });
 
   it("fails closed when SDK encryption state does not match the room state", async () => {

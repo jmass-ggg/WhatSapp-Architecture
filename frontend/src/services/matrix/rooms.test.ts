@@ -1,7 +1,7 @@
 import { MatrixEvent, type Room } from "matrix-js-sdk";
 import { describe, expect, it } from "vitest";
 
-import { conversationFromMatrixRoom } from "./rooms";
+import { conversationFromMatrixRoom, conversationsFromMatrixClient } from "./rooms";
 
 describe("Matrix room mapping", () => {
   it("deduplicates event IDs and derives room state from the SDK room model", () => {
@@ -48,5 +48,45 @@ describe("Matrix room mapping", () => {
       text: "hello from Synapse",
       sender: "them",
     });
+  });
+
+  it("shows encrypted invitations and keeps unique messages in timestamp order", () => {
+    const later = new MatrixEvent({
+      event_id: "$later:localhost", room_id: "!invite:localhost",
+      sender: "@other:localhost", type: "m.room.message",
+      origin_server_ts: 2000, content: { msgtype: "m.text", body: "later" },
+    });
+    const earlier = new MatrixEvent({
+      event_id: "$earlier:localhost", room_id: "!invite:localhost",
+      sender: "@other:localhost", type: "m.room.message",
+      origin_server_ts: 1000, content: { msgtype: "m.text", body: "earlier" },
+    });
+    const room = {
+      roomId: "!invite:localhost", name: "", getMembers: () => [],
+      getLiveTimeline: () => ({ getEvents: () => [later, earlier, later] }),
+      getMyMembership: () => "invite", hasEncryptionStateEvent: () => true,
+      getUnreadNotificationCount: () => 2, getLastActiveTimestamp: () => Number.MIN_SAFE_INTEGER,
+      guessDMUserId: () => "@other:localhost",
+    } as unknown as Room;
+
+    const [conversation] = conversationsFromMatrixClient([room], "@self:localhost");
+    expect(conversation.isEncrypted).toBe(true);
+    expect(conversation.messages.map((message) => message.id)).toEqual([
+      "$earlier:localhost", "$later:localhost",
+    ]);
+    expect(conversation.lastMessage).toBe("later");
+  });
+
+  it("does not expose an invalid date for an empty invited room", () => {
+    const room = {
+      roomId: "!empty:localhost", name: "", getMembers: () => [],
+      getLiveTimeline: () => ({ getEvents: () => [] }),
+      getMyMembership: () => "invite", hasEncryptionStateEvent: () => true,
+      getUnreadNotificationCount: () => 0,
+      getLastActiveTimestamp: () => Number.MIN_SAFE_INTEGER,
+      guessDMUserId: () => "@other:localhost",
+    } as unknown as Room;
+    const [conversation] = conversationsFromMatrixClient([room], "@self:localhost");
+    expect(conversation.updatedAt.getTime()).toBe(0);
   });
 });

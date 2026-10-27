@@ -63,6 +63,11 @@ export async function sendEncryptedTextMessage(
   if (!crypto) {
     throw new Error("Matrix Rust crypto is unavailable; message was not sent.");
   }
+  if (!(await crypto.isCrossSigningReady())) {
+    throw new Error(
+      "Cross-signing is not set up on this account. Configure secure recovery before sending encrypted messages.",
+    );
+  }
 
   const room = client.getRoom(roomId);
   if (!room?.hasEncryptionStateEvent()) {
