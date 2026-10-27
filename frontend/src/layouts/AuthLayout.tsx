@@ -5,7 +5,7 @@ import { InfoModal } from "../components/InfoModal";
 
 const footerCopy: Record<string, string> = {
   "Privacy Policy":
-    "The LumaChat frontend is a prototype. Privacy policy content and production data-retention details have not been published yet.",
+    "The Recruitable Chat frontend is a prototype. Privacy policy content and production data-retention details have not been published yet.",
   "Terms of Service":
     "Terms of Service content has not been published yet. Do not use this prototype for sensitive or production communication.",
   Help: "For now, use the project's README and development notes for setup help. A support channel is not configured.",
@@ -20,7 +20,7 @@ export function AuthLayout({ children }: PropsWithChildren) {
       <div className="auth-shell">
         <div className="auth-main">{children}</div>
         <footer className="auth-footer">
-          <span>© {new Date().getFullYear()} LumaChat</span>
+          <span>© {new Date().getFullYear()} Recruitable Chat</span>
           <nav aria-label="Footer">
             {Object.keys(footerCopy).map((label) => (
               <button

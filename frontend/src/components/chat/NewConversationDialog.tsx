@@ -151,7 +151,7 @@ export function NewConversationDialog({
       >
         <header className="new-chat-dialog-header">
           <div>
-            <span className="eyebrow">{mode === "demo" ? "DEMO PREVIEW" : "LUMACHAT DIRECTORY"}</span>
+            <span className="eyebrow">{mode === "demo" ? "DEMO PREVIEW" : "RECRUITABLE CHAT DIRECTORY"}</span>
             <h2 id="new-chat-title">Start a conversation</h2>
             <p>
               {mode === "demo"
@@ -194,7 +194,7 @@ export function NewConversationDialog({
                 />
                 <span className="directory-result-copy">
                   <strong>{conversation.name}</strong>
-                  <small>{conversation.username ?? "LumaChat demo contact"}</small>
+                  <small>{conversation.username ?? "Recruitable Chat demo contact"}</small>
                 </span>
                 <ArrowUpRight size={17} />
               </button>

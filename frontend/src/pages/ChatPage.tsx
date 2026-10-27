@@ -53,7 +53,7 @@ function conversationForContact(connection: UserConnection): Conversation {
     updatedAt: new Date(0),
     unreadCount: 0,
     messages: [],
-    bio: contact.profile?.bio ?? "LumaChat contact",
+    bio: contact.profile?.bio ?? "Recruitable Chat contact",
     isDemo: false,
     isEncrypted: false,
     isGroup: false,

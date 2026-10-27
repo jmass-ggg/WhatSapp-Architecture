@@ -12,7 +12,7 @@ export function Brand({ compact = false, light = false }: BrandProps) {
         <MessageCircle size={22} strokeWidth={2.5} />
         <span className="brand-mark-dot" />
       </span>
-      {!compact && <span className="brand-name">LumaChat</span>}
+      {!compact && <span className="brand-name">Recruitable Chat</span>}
     </div>
   );
 }

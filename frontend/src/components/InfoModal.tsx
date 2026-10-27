@@ -38,7 +38,7 @@ export function InfoModal({ title, children, onClose }: InfoModalProps) {
         >
           <X size={18} />
         </button>
-        <span className="eyebrow">LUMACHAT</span>
+        <span className="eyebrow">RECRUITABLE CHAT</span>
         <h2 id="info-modal-title">{title}</h2>
         <p>{children}</p>
       </section>

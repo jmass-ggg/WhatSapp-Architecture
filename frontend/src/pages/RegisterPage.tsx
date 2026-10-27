@@ -86,7 +86,7 @@ export function RegisterPage() {
       navigate("/login", {
         replace: true,
         state: {
-          notice: "Your account is ready. Log in to open your LumaChat and Matrix sessions.",
+          notice: "Your account is ready. Log in to open your Recruitable Chat and Matrix sessions.",
           login: email.trim(),
         },
       });
@@ -171,7 +171,7 @@ export function RegisterPage() {
                 spellCheck={false}
               />
             </div>
-            <span className="field-hint">This also identifies you in the LumaChat directory.</span>
+            <span className="field-hint">This also identifies you in the Recruitable Chat directory.</span>
           </div>
 
           <div className="field">

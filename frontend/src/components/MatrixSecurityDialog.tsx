@@ -309,7 +309,7 @@ export function MatrixSecurityDialog({
             {snapshot.pendingRecoveryKey && (
               <div className="recovery-key-panel">
                 <p>
-                  Save this key now. LumaChat will not store or send it. Closing this dialog discards
+                  Save this key now. Recruitable Chat will not store or send it. Closing this dialog discards
                   the unsaved key.
                 </p>
                 <code>{snapshot.pendingRecoveryKey}</code>

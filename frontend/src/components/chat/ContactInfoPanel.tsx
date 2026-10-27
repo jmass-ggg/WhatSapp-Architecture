@@ -88,7 +88,7 @@ export function ContactInfoPanel({
           {conversation.username && !conversation.isGroup && (
             <span className="contact-handle">@{conversation.username}</span>
           )}
-          <p>{conversation.bio ?? (mode === "demo" ? "A friend on LumaChat." : "Matrix contact")}</p>
+          <p>{conversation.bio ?? (mode === "demo" ? "A friend on Recruitable Chat." : "Matrix contact")}</p>
         </div>
 
         <section className="contact-section">
