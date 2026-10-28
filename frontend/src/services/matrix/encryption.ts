@@ -1,5 +1,5 @@
 import type { MatrixClient } from "matrix-js-sdk";
-import { Preset, Visibility } from "matrix-js-sdk";
+import { EventType, Preset, Visibility } from "matrix-js-sdk";
 import type { ISendEventResponse } from "matrix-js-sdk";
 
 export const MATRIX_ROOM_ENCRYPTION_ALGORITHM = "m.megolm.v1.aes-sha2";
@@ -20,7 +20,7 @@ export async function createEncryptedRoom(
   }
   if (!(await crypto.isCrossSigningReady())) {
     throw new Error(
-      "Secure recovery must be ready before creating an encrypted conversation.",
+      "Cross-signing must be ready before creating an encrypted conversation.",
     );
   }
   if (options.invitees.length === 0) {
@@ -71,11 +71,26 @@ export async function sendEncryptedTextMessage(
   }
   if (!(await crypto.isCrossSigningReady())) {
     throw new Error(
-      "Cross-signing is not set up on this account. Configure secure recovery before sending encrypted messages.",
+      "Cross-signing is not ready on this account; the message was not sent.",
     );
   }
 
   const room = client.getRoom(roomId);
+  if (!room || room.getMyMembership() !== "join") {
+    throw new Error("Join the encrypted room before sending a message.");
+  }
+  const ownUserId = client.getUserId();
+  if (
+    !ownUserId ||
+    !room.currentState.maySendEvent(
+      EventType.RoomMessageEncrypted,
+      ownUserId,
+    )
+  ) {
+    throw new Error(
+      "You do not have permission to send encrypted messages in this room.",
+    );
+  }
   if (!room?.hasEncryptionStateEvent()) {
     throw new Error(
       "This room is not confirmed as encrypted. The message was not sent.",

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { EventType } from "matrix-js-sdk";
 
 import { AppLayout } from "../layouts/AppLayout";
 import { ContactInfoPanel } from "../components/chat/ContactInfoPanel";
@@ -90,7 +91,6 @@ export function ChatPage() {
   const matrix = useMatrixRooms();
   const matrixContext = useMatrixContext();
   const onboardingNeedsAttention =
-    matrixContext.cryptoOnboardingStatus === "save_recovery_key" ||
     matrixContext.cryptoOnboardingStatus === "restore_encryption" ||
     matrixContext.cryptoOnboardingStatus === "incomplete";
   const dismissToast = useCallback(() => setToast(null), []);
@@ -289,6 +289,31 @@ export function ChatPage() {
           member.userId === selectedConversation.matrixUserId &&
           member.membership === "join",
       ),
+  );
+  const ownMatrixUserId = matrixContext.client?.getUserId();
+  const ownHasEncryptedSendPermission = Boolean(
+    selectedRoom &&
+      ownMatrixUserId &&
+      selectedRoom.currentState.maySendEvent(
+        EventType.RoomMessageEncrypted,
+        ownMatrixUserId,
+      ),
+  );
+  const directPeerHasEncryptedSendPermission = Boolean(
+    !isDirectConversation ||
+      (selectedRoom &&
+        selectedConversation?.matrixUserId &&
+        selectedRoom.currentState.maySendEvent(
+          EventType.RoomMessageEncrypted,
+          selectedConversation.matrixUserId,
+        )),
+  );
+  const canSendEncryptedMessage = Boolean(
+    selectedRoom &&
+      selectedRoom.getMyMembership() === "join" &&
+      (!isDirectConversation || directPeerJoined) &&
+      ownHasEncryptedSendPermission &&
+      directPeerHasEncryptedSendPermission,
   );
   const canShowComposer = Boolean(
     selectedConversation &&
@@ -551,6 +576,28 @@ export function ChatPage() {
             ))
         ) {
           throw new Error("Both users must join the encrypted room before messaging.");
+        }
+        if (
+          !selectedConversation.isGroup &&
+          (!selectedConversation.matrixUserId ||
+            !room.currentState.maySendEvent(
+              EventType.RoomMessageEncrypted,
+              selectedConversation.matrixUserId,
+            ))
+        ) {
+          throw new Error(
+            "Both users need permission to send encrypted messages in this room.",
+          );
+        }
+        const ownUserId = matrixContext.client.getUserId();
+        if (
+          !ownUserId ||
+          !room.currentState.maySendEvent(
+            EventType.RoomMessageEncrypted,
+            ownUserId,
+          )
+        ) {
+          throw new Error("You do not have permission to send encrypted messages in this room.");
         }
         await sendEncryptedTextMessage(
           matrixContext.client,
@@ -818,8 +865,7 @@ export function ChatPage() {
                   matrix.cryptoStatus !== "ready" ||
                   matrixContext.cryptoOnboardingStatus !== "ready" ||
                   matrixContext.crossSigningReady !== true ||
-                  selectedRoom?.getMyMembership() !== "join" ||
-                  (isDirectConversation && !directPeerJoined))
+                  !canSendEncryptedMessage)
               }
               attachmentsDisabled={mode === "live"}
               busy={false}
@@ -843,12 +889,17 @@ export function ChatPage() {
                   ? selectedConversation.isEncrypted
                     ? matrix.cryptoStatus !== "ready"
                       ? "Encrypted sending is unavailable until Rust crypto is ready."
-                      : matrixContext.cryptoOnboardingStatus !== "ready"
-                        ? "Complete encryption recovery setup before sending messages."
+                    : matrixContext.cryptoOnboardingStatus !== "ready"
+                        ? "Wait for secure messaging setup to finish."
                       : matrixContext.crossSigningReady !== true
-                        ? "Set up secure recovery and cross-signing in Encryption and devices before sending."
-                        : isDirectConversation && !directPeerJoined
-                          ? "Both users must join the encrypted room before messaging."
+                        ? "Cross-signing must be ready before sending."
+                      : isDirectConversation && !directPeerJoined
+                        ? "Both users must join the encrypted room before messaging."
+                        : isDirectConversation &&
+                            !directPeerHasEncryptedSendPermission
+                          ? "Your contact does not have permission to send encrypted messages in this room."
+                        : !canSendEncryptedMessage
+                          ? "You do not have permission to send messages in this room."
                         : "Messages are encrypted on this device before they reach Synapse."
                     : "This existing room is plaintext. Create a new encrypted room to send messages."
                   : undefined

@@ -1,6 +1,4 @@
 import {
-  Check,
-  Copy,
   KeyRound,
   LockKeyhole,
   ShieldCheck,
@@ -44,10 +42,8 @@ export function MatrixSecurityDialog({
   const [peerDevices, setPeerDevices] = useState<MatrixDeviceSummary[]>([]);
   const [ownDevices, setOwnDevices] = useState<MatrixDeviceSummary[]>([]);
   const [recoveryInput, setRecoveryInput] = useState("");
-  const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
   const [showLostRecoveryHelp, setShowLostRecoveryHelp] = useState(false);
 
   useEffect(() => {
@@ -84,24 +80,6 @@ export function MatrixSecurityDialog({
     } catch {
       setError(
         "Secure messaging could not be checked. Check your connection and retry.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function enableRecovery() {
-    if (!manager || !acknowledged) return;
-    setBusy(true);
-    setError("");
-    try {
-      await manager.confirmRecoveryKeySaved();
-      setAcknowledged(false);
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Secure recovery could not be enabled.",
       );
     } finally {
       setBusy(false);
@@ -199,39 +177,22 @@ export function MatrixSecurityDialog({
     }
   }
 
-  async function copyRecoveryKey() {
-    if (!snapshot.pendingRecoveryKey) return;
-    try {
-      await navigator.clipboard.writeText(snapshot.pendingRecoveryKey);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch {
-      setError("Clipboard access is unavailable. Select and copy the key.");
-    }
-  }
-
   function close() {
-    if (snapshot.pendingRecoveryKey) return;
     setRecoveryInput("");
     onClose();
   }
 
   const verification = snapshot.verification;
   const onboardingTitle =
-    snapshot.cryptoOnboardingStatus === "save_recovery_key"
-      ? "Save your recovery key"
-      : snapshot.cryptoOnboardingStatus === "restore_encryption"
-        ? "Restore encryption"
-        : snapshot.cryptoOnboardingStatus === "incomplete"
-          ? "Encryption setup needs attention"
-          : "Encryption and devices";
-  const recoveryKeyRequired =
-    snapshot.cryptoOnboardingStatus === "save_recovery_key" &&
-    snapshot.pendingRecoveryKey !== null;
+    snapshot.cryptoOnboardingStatus === "restore_encryption"
+      ? "Restore encryption"
+      : snapshot.cryptoOnboardingStatus === "incomplete"
+        ? "Encryption setup needs attention"
+        : "Encryption and devices";
 
   return (
     <div className="modal-backdrop new-chat-backdrop security-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !recoveryKeyRequired) close();
+      if (event.target === event.currentTarget) close();
     }}>
       <section
         className="security-dialog"
@@ -244,20 +205,16 @@ export function MatrixSecurityDialog({
             <span className="eyebrow">MATRIX SECURITY</span>
             <h2 id="matrix-security-title">{onboardingTitle}</h2>
             <p>
-              {snapshot.cryptoOnboardingStatus === "save_recovery_key"
-                ? "Save your recovery key once to finish setting up encrypted chat."
-                : snapshot.cryptoOnboardingStatus === "restore_encryption"
-                  ? "Use your existing recovery key to unlock encryption on this device."
-                  : snapshot.cryptoOnboardingStatus === "incomplete"
-                    ? "Your existing encryption data was left unchanged."
-                    : "Room encryption, identity verification, and key recovery."}
+              {snapshot.cryptoOnboardingStatus === "restore_encryption"
+                ? "Use your existing recovery key to unlock encryption on this device."
+                : snapshot.cryptoOnboardingStatus === "incomplete"
+                  ? "Your existing encryption data was left unchanged."
+                  : "Room encryption, identity verification, and encrypted history backup."}
             </p>
           </div>
-          {!recoveryKeyRequired && (
-            <button type="button" className="icon-button" aria-label="Close security settings" onClick={close}>
-              <X size={19} />
-            </button>
-          )}
+          <button type="button" className="icon-button" aria-label="Close security settings" onClick={close}>
+            <X size={19} />
+          </button>
         </header>
 
         <div className="security-dialog-content">
@@ -274,9 +231,7 @@ export function MatrixSecurityDialog({
                       ? "Restore encryption to continue"
                       : snapshot.cryptoOnboardingStatus === "incomplete"
                         ? "Encryption needs attention"
-                        : snapshot.cryptoError
-                          ? "Secure setup needs a retry"
-                          : "Save your recovery key"}
+                        : "Secure setup needs a retry"}
               </strong>
               <span>
                 {snapshot.cryptoError ??
@@ -289,9 +244,10 @@ export function MatrixSecurityDialog({
           {snapshot.cryptoOnboardingStatus === "incomplete" && (
             <section className="security-section" role="status">
               <p>
-                Recruitable Chat found existing encryption keys but could not unlock
-                them on this device. No new account keys were created. Restore
-                with your recovery key or verify another device.
+                Encrypted messaging is blocked because this device cannot verify
+                the account&apos;s cross-signing state. No replacement identity or
+                recovery backup was created. Restore existing encryption material
+                or verify another device.
               </p>
               <button
                 type="button"
@@ -338,43 +294,27 @@ export function MatrixSecurityDialog({
             {snapshot.keyBackupVersion && (
               <p>Backup version: {snapshot.keyBackupVersion}</p>
             )}
-            {snapshot.cryptoOnboardingStatus === "save_recovery_key" &&
-              !snapshot.pendingRecoveryKey && (
-              <div>
-                <p>
-                  Setting up a recovery key through Matrix. Encrypted messaging
-                  remains unavailable until this finishes.
-                </p>
-                <button type="button" className="security-button secondary" disabled={busy || snapshot.cryptoStatus !== "ready"} onClick={() => void retrySetup()}>
-                  Retry setup
-                </button>
-              </div>
+            {snapshot.keyBackupStatus === "not_configured" && (
+              <p>
+                No encrypted history backup is configured. Losing this device may
+                make old messages unrecoverable.
+              </p>
             )}
-            {snapshot.pendingRecoveryKey && (
-              <div className="recovery-key-panel">
-                <p>
-                  Copy this key and store it somewhere private. Recruitable Chat keeps
-                  it in memory while setup finishes and never sends it to
-                  FastAPI or stores it as plaintext.
-                </p>
-                <code>{snapshot.pendingRecoveryKey}</code>
-                <button type="button" className="security-button secondary" onClick={() => void copyRecoveryKey()}>
-                  {copied ? <Check size={15} /> : <Copy size={15} />}
-                  {copied ? "Copied" : "Copy recovery key"}
-                </button>
-                <label className="security-checkbox">
-                  <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
-                  I saved this recovery key in a secure place.
-                </label>
-                <button type="button" className="security-button" disabled={busy || !acknowledged} onClick={() => void enableRecovery()}>
-                  {busy ? "Finishing secure setup…" : "I saved my recovery key"}
-                </button>
-              </div>
+            {snapshot.keyBackupStatus === "trusted" && (
+              <p>A trusted encrypted history backup is configured.</p>
+            )}
+            {snapshot.keyBackupStatus === "untrusted" && (
+              <p>
+                A backup exists, but this device could not verify it. Restore with
+                existing recovery material before relying on it.
+              </p>
+            )}
+            {snapshot.keyBackupStatus === "error" && (
+              <p>Encrypted history backup status could not be verified.</p>
             )}
             {(snapshot.keyBackupStatus === "trusted" ||
               snapshot.keyBackupStatus === "untrusted" ||
-              snapshot.cryptoOnboardingStatus === "restore_encryption") &&
-              snapshot.cryptoOnboardingStatus !== "save_recovery_key" && (
+              snapshot.cryptoOnboardingStatus === "restore_encryption") && (
               <div className="recovery-restore">
                 <label htmlFor="matrix-recovery-key">Restore encryption on this device</label>
                 <input

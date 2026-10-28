@@ -234,8 +234,11 @@ async function waitFor(predicate, label, timeoutMs = 30_000) {
 }
 
 async function prepareCrossSigning(page, label) {
-  await page.getByRole("button", { name: "Encryption and devices" }).click();
-  const dialog = page.getByRole("dialog", { name: "Encryption and devices" });
+  const securityDialog = page.getByRole("dialog");
+  if (!(await securityDialog.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: "Encryption and devices" }).click();
+  }
+  const dialog = page.getByRole("dialog");
   const identitySection = dialog
     .locator(".security-section")
     .filter({ hasText: "Identity and cross-signing" });
@@ -249,74 +252,33 @@ async function prepareCrossSigning(page, label) {
   }, `${label} cross-signing status`);
 
   if ((await identityStatus.innerText()) !== readyText) {
-    const generateButton = dialog.getByRole("button", {
-      name: "Generate recovery key",
-    });
     const restoreInput = dialog.locator("#matrix-recovery-key");
-    try {
-      await waitFor(async () =>
-        (await generateButton.isVisible().catch(() => false)) ||
-        (await restoreInput.isVisible().catch(() => false)),
-      `${label} recovery setup options`);
-    } catch (cause) {
-      const cryptoStatus = await dialog
-        .locator(".security-status-card strong")
-        .innerText()
-        .catch(() => "unavailable");
-      const backupStatus = await dialog
-        .locator(".security-pill")
-        .innerText()
-        .catch(() => "unavailable");
-      const errors = await dialog.locator(".dialog-error").allInnerTexts();
-      throw new Error(
-        `${label} recovery setup unavailable: crossSigning=${await identityStatus.innerText()}, ` +
-        `crypto=${cryptoStatus}, backup=${backupStatus}, ` +
-        `generate=${await generateButton.isVisible().catch(() => false)}, ` +
-        `restore=${await restoreInput.isVisible().catch(() => false)}, ` +
-        `dialogErrors=${errors.join(" | ") || "none"}`,
-        { cause },
-      );
-    }
-
-    if (await generateButton.isVisible()) {
-      await generateButton.click();
-      const recoveryKey = (
-        await dialog.locator(".recovery-key-panel code").textContent()
-      )?.trim();
-      assert.ok(recoveryKey, "The SDK should provide recovery material");
-      const keyPath = recoveryKeyPath(label);
-      writeFileSync(keyPath, `${recoveryKey}\n`, { mode: 0o600 });
-      chmodSync(keyPath, 0o600);
-      await dialog
-        .getByRole("checkbox", {
-          name: "I saved this recovery key in a secure place.",
-        })
-        .check();
-      await dialog
-        .getByRole("button", { name: "Enable secure recovery" })
-        .click();
-    } else {
-      const keyPath = recoveryKeyPath(label);
-      assert.ok(
-        existsSync(keyPath),
-        `${label} has existing recovery state but no cached recovery key; refusing to replace it`,
-      );
-      await restoreInput.fill(readFileSync(keyPath, "utf8").trim());
-      await dialog
-        .getByRole("button", { name: "Restore encrypted history" })
-        .click();
-    }
+    const keyPath = recoveryKeyPath(label);
+    assert.ok(
+      existsSync(keyPath) && await restoreInput.isVisible(),
+      `${label} cross-signing is not ready and no existing recovery key is available; refusing to create a replacement identity`,
+    );
+    await restoreInput.fill(readFileSync(keyPath, "utf8").trim());
+    await dialog.getByRole("button", { name: "Restore encryption" }).click();
+    await dialog.getByText(/^Recovery finished:/).waitFor({
+      state: "visible",
+      timeout: 60_000,
+    });
 
     await dialog.getByText(readyText, { exact: true }).waitFor({
       state: "visible",
       timeout: 30_000,
     });
-    await dialog.locator(".security-pill.is-trusted").waitFor({
-      state: "visible",
-      timeout: 30_000,
-    });
   }
 
+  assert.equal(
+    await dialog.getByRole("button", {
+      name: "Generate recovery key",
+      exact: true,
+    }).count(),
+    0,
+    `${label} must not receive a recovery-key generation button`,
+  );
   await dialog
     .getByRole("button", { name: "Close security settings" })
     .click();

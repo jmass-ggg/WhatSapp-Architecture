@@ -22,8 +22,16 @@ const chromiumPath =
   process.env.CHROMIUM_EXECUTABLE || "/usr/bin/chromium-browser";
 const runId = randomUUID().replaceAll("-", "").slice(0, 12);
 const password = `Step07-browser-${randomUUID()}!`;
-// Synapse's effective rc_login.address default refills at 0.003 requests/sec.
-const minimumLoginIntervalMs = 350_000;
+// Keep the conservative Synapse default for unspecified servers. The isolated
+// local test homeserver can override this after applying test-only rc_login limits.
+const minimumLoginIntervalMs = Number(
+  process.env.LUMACHAT_TEST_MATRIX_LOGIN_INTERVAL_MS ?? 350_000,
+);
+if (!Number.isFinite(minimumLoginIntervalMs) || minimumLoginIntervalMs < 0) {
+  throw new Error(
+    "LUMACHAT_TEST_MATRIX_LOGIN_INTERVAL_MS must be a non-negative number.",
+  );
+}
 
 let browser;
 let browserContext;
@@ -152,10 +160,10 @@ async function registerThroughUi(label, targetPage = page) {
   assert.ok(payload.matrix.access_token);
   assert.ok(payload.matrix.device_id);
   await targetPage.waitForURL("**/chat", { timeout: 20_000 });
-  await targetPage.locator(".recovery-key-panel code").waitFor({
-    state: "visible",
-    timeout: 45_000,
-  });
+  await targetPage.getByRole("status")
+    .filter({ hasText: "Encrypted chat ready" })
+    .first()
+    .waitFor({ state: "visible", timeout: 45_000 });
   return {
     account: {
       id: profile.id,
@@ -349,71 +357,39 @@ async function verifyPeerInBrowser(initiatorPage, responderPage, peerDeviceId) {
   );
 }
 
-async function prepareBrowserRecovery(targetPage = page) {
-  const dialog = targetPage.getByRole("dialog", { name: "Save your recovery key" });
-  const recoveryKey = await dialog.locator(".recovery-key-panel code").textContent();
-  assert.ok(recoveryKey?.trim(), "The SDK should generate recovery material");
-  assert.ok(
-    !await targetPage.evaluate(
-      (key) => Object.values(localStorage).some((value) => value.includes(key)),
-      recoveryKey.trim(),
-    ),
-    "The recovery key must not be written to persistent browser storage",
+async function verifyAutomaticCryptoSetup(targetPage = page) {
+  assert.equal(
+    await targetPage.getByRole("dialog", { name: "Save your recovery key" }).count(),
+    0,
+    "New accounts must not receive a blocking recovery-key dialog",
   );
-  await dialog
-    .getByRole("checkbox", {
-      name: "I saved this recovery key in a secure place.",
-    })
-    .check();
-  await dialog
-    .getByRole("button", { name: "I saved my recovery key" })
+  await targetPage
+    .getByRole("button", { name: "Encryption and devices" })
     .click();
-  const activeDialog = targetPage.getByRole("dialog");
-  await activeDialog.locator(".security-pill.is-trusted").waitFor({
-    state: "visible",
-    timeout: 30_000,
-  });
-  await activeDialog
-    .getByText("Cross-signing is ready on this device.", { exact: true })
-    .waitFor({ state: "visible", timeout: 20_000 });
-  await activeDialog.getByText("Encrypted chat ready", { exact: true }).waitFor();
-  await activeDialog.getByRole("button", { name: "Close security settings" }).click();
-  console.log(
-    "PASS automatic browser recovery-key setup, confirmation, secret storage, trusted backup, and cross-signing",
-  );
-  return recoveryKey.trim();
-}
-
-async function restoreBrowserEncryption(targetPage, recoveryKey) {
-  const restoreDialog = targetPage.getByRole("dialog", {
-    name: "Restore encryption",
-  });
-  await restoreDialog.waitFor({ state: "visible", timeout: 45_000 });
-  await restoreDialog
-    .getByLabel("Restore encryption on this device")
-    .fill(recoveryKey);
-  await restoreDialog
-    .getByRole("button", { name: "Restore encryption" })
-    .click();
-  const dialog = targetPage.getByRole("dialog");
-  await dialog.getByText(/^Recovery finished:/).waitFor({
-    state: "visible",
-    timeout: 60_000,
-  });
-  await dialog.locator(".security-pill.is-trusted").waitFor({
-    state: "visible",
-    timeout: 30_000,
+  const dialog = targetPage.getByRole("dialog", {
+    name: "Encryption and devices",
   });
   await dialog
     .getByText("Cross-signing is ready on this device.", { exact: true })
-    .waitFor({ state: "visible", timeout: 30_000 });
-  await dialog.getByText("Encrypted chat ready", { exact: true }).waitFor({
-    state: "visible",
-    timeout: 30_000,
-  });
+    .waitFor({ state: "visible", timeout: 20_000 });
+  await dialog.getByText(
+    "No encrypted history backup is configured. Losing this device may make old messages unrecoverable.",
+    { exact: true },
+  ).waitFor({ state: "visible", timeout: 20_000 });
+  for (const name of [
+    "Generate recovery key",
+    "Save recovery key",
+    "I saved my recovery key",
+  ]) {
+    assert.equal(
+      await dialog.getByRole("button", { name, exact: true }).count(),
+      0,
+      `New account setup must not expose "${name}"`,
+    );
+  }
   await dialog.getByRole("button", { name: "Close security settings" }).click();
   console.log(
-    "PASS returning browser device restored encryption, cross-signing, and trusted backup with the saved recovery key",
+    "PASS automatic cross-signing setup without recovery-key UI or an implied history backup",
   );
 }
 
@@ -510,19 +486,17 @@ async function signOutThroughUi(targetPage = page) {
   });
 }
 
-async function waitForServerBackup(session) {
-  return waitFor(async () => {
-    const response = await fetch(
-      `${matrixUrl}/_matrix/client/v3/room_keys/version`,
-      {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      },
-    );
-    if (response.status === 404) return null;
-    assert.equal(response.status, 200);
-    const backup = await response.json();
-    return backup.count > 0 ? backup : null;
-  }, "an uploaded encrypted room-key backup", 60_000);
+async function assertNoServerBackup(session) {
+  const response = await fetch(
+    `${matrixUrl}/_matrix/client/v3/room_keys/version`,
+    {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    },
+  );
+  if (response.status === 404) return;
+  assert.equal(response.status, 200);
+  const backup = await response.json();
+  assert.equal(backup.count, 0, "New-account setup must not create a key backup");
 }
 
 try {
@@ -545,13 +519,15 @@ try {
   const registeredA = await registerThroughUi("a");
   const accountA = registeredA.account;
   const sessionA = registeredA.matrix;
-  const recoveryKeyA = await prepareBrowserRecovery(page);
+  await verifyAutomaticCryptoSetup(page);
+  await assertNoServerBackup(sessionA);
   console.log("PASS Alice registered through the UI and was signed in automatically");
 
   const registeredB = await registerThroughUi("b", pageB);
   const accountB = registeredB.account;
   const sessionB = registeredB;
-  const recoveryKeyB = await prepareBrowserRecovery(pageB);
+  await verifyAutomaticCryptoSetup(pageB);
+  await assertNoServerBackup(sessionB.matrix);
   assert.notEqual(sessionA.user_id, sessionB.matrix.user_id);
   console.log("PASS Bob registered through the UI and was signed in automatically");
 
@@ -801,7 +777,7 @@ try {
   );
 
   const originalBobDeviceId = sessionB.matrix.device_id;
-  await waitForServerBackup(sessionB.matrix);
+  await assertNoServerBackup(sessionB.matrix);
   browserContextC = await browser.newContext({
     viewport: { width: 1365, height: 900 },
   });
@@ -828,45 +804,49 @@ try {
       ),
     "The original Matrix device identity should remain registered",
   );
-  await restoreBrowserEncryption(pageC, recoveryKeyB);
-  const restoredBobRoom = pageC
+  const recoveryWarning = pageC.getByRole("dialog", {
+    name: "Encryption setup needs attention",
+  });
+  await recoveryWarning.waitFor({ state: "visible", timeout: 45_000 });
+  await recoveryWarning
+    .getByText(/No replacement identity or recovery backup was created/)
+    .waitFor({ state: "visible", timeout: 20_000 });
+  await recoveryWarning.locator(".security-pill.is-not_configured").waitFor({
+    state: "visible",
+    timeout: 20_000,
+  });
+  assert.equal(
+    await recoveryWarning.getByRole("button", {
+      name: "Generate recovery key",
+      exact: true,
+    }).count(),
+    0,
+  );
+  await recoveryWarning
+    .getByRole("button", { name: "Close security settings" })
+    .click();
+  const bobRoomOnNewDevice = pageC
     .locator(".conversation-row")
     .filter({ hasText: accountA.displayName });
-  await restoredBobRoom.waitFor({ state: "visible", timeout: 45_000 });
-  await restoredBobRoom.click();
+  await bobRoomOnNewDevice.waitFor({ state: "visible", timeout: 45_000 });
+  await bobRoomOnNewDevice.click();
   await pageC.getByLabel("Write a message").waitFor({
     state: "visible",
     timeout: 30_000,
   });
-  for (const body of [aliceBody, bobBody, missedBody]) {
-    await pageC
-      .locator(".message-row")
-      .filter({ hasText: body })
-      .getByText(body, { exact: true })
-      .waitFor({ state: "visible", timeout: 45_000 });
-  }
   console.log(
-    `PASS fresh authorized device ${sessionC.matrix.device_id} restored Bob's encrypted message history; original device ${originalBobDeviceId} remains registered`,
+    `PASS unconfigured new device ${sessionC.matrix.device_id} preserved Bob's existing identity and was blocked pending recovery; original device ${originalBobDeviceId} remains registered`,
   );
-
-  const restoredBody = `e2ee-browser-restored-bob-to-alice-${runId}`;
-  await pageC.getByLabel("Write a message").fill(restoredBody);
-  await pageC.getByRole("button", { name: "Send message" }).click();
-  const restoredRow = pageC.locator(".message-row").filter({ hasText: restoredBody });
-  const restoredEventId = await waitForServerEventId(
-    restoredRow,
-    "Restored Bob device's message to be acknowledged by Synapse",
+  assert.equal(
+    await pageC.getByLabel("Write a message").isDisabled(),
+    true,
+    "The composer must remain disabled until the existing identity is recovered",
   );
-  await waitFor(
-    async () =>
-      (await restoredRow.getAttribute("data-event-type")) === "m.room.encrypted",
-    "Restored Bob device's message to be encrypted",
+  assert.equal(
+    await pageC.getByRole("button", { name: "Send message" }).isDisabled(),
+    true,
+    "A device without the existing cross-signing keys must not send",
   );
-  await serverEvent(sessionC.matrix, roomId, restoredEventId, restoredBody);
-  await page.locator(`.message-row[data-event-id="${restoredEventId}"]`)
-    .getByText(restoredBody, { exact: true })
-    .waitFor({ state: "visible", timeout: 45_000 });
-  console.log("PASS restored Bob device sent an encrypted message that Alice decrypted");
 
   assert.deepEqual(browserErrors, []);
   assert.equal(unauthenticatedRestoreResponses, 3);

@@ -26,7 +26,6 @@ function labelFor(
   if (cryptoStatus === "initializing" || cryptoOnboardingStatus === "checking") {
     return "Setting up secure messaging…";
   }
-  if (cryptoOnboardingStatus === "save_recovery_key") return "Save your recovery key";
   if (cryptoOnboardingStatus === "restore_encryption") return "Restore encryption";
   if (cryptoOnboardingStatus === "incomplete") return "Encryption setup needs attention";
   if (

@@ -33,15 +33,27 @@ interface AuthContextValue {
   user: UserProfile | null;
   mode: AuthMode | null;
   matrixSession: MatrixSession | null;
+  newlyRegisteredUserId: string | null;
   api: ApiClient;
   isAuthenticated: boolean;
   signIn: (input: LoginInput) => Promise<void>;
   register: (input: RegisterInput) => Promise<UserProfile>;
+  completeNewAccountCryptoSetup: (userId: string) => void;
   signOut: () => Promise<void>;
   enterDemo: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const newAccountCryptoSetupKey = (userId: string) =>
+  `lumachat.pending-new-account-crypto-setup.${userId}`;
+
+function isPendingNewAccountCryptoSetup(userId: string): boolean {
+  try {
+    return window.sessionStorage.getItem(newAccountCryptoSetupKey(userId)) === "1";
+  } catch {
+    return false;
+  }
+}
 
 const demoUser: UserProfile = {
   id: "demo-user",
@@ -70,9 +82,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mode, setMode] = useState<AuthMode | null>(null);
   const [matrixSession, setMatrixSession] = useState<MatrixSession | null>(null);
+  const [newlyRegisteredUserId, setNewlyRegisteredUserId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(true);
   const restorePromise = useRef<Promise<void> | null>(null);
   const matrixSessionRef = useRef<MatrixSession | null>(null);
+  const newlyRegisteredUserIdRef = useRef<string | null>(null);
   matrixSessionRef.current = matrixSession;
 
   api.setCallbacks({
@@ -83,6 +97,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setUser(null);
       setMode(null);
       setMatrixSession(null);
+      setNewlyRegisteredUserId(null);
     },
   });
 
@@ -96,6 +111,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
         matrixSessionRef.current = session.matrix;
         setMatrixSession(session.matrix);
         setUser(profile);
+        const pendingNewAccountSetup = isPendingNewAccountCryptoSetup(profile.id);
+        newlyRegisteredUserIdRef.current = pendingNewAccountSetup ? profile.id : null;
+        setNewlyRegisteredUserId(pendingNewAccountSetup ? profile.id : null);
         setMode("live");
       })();
     }
@@ -116,22 +134,46 @@ export function AuthProvider({ children }: PropsWithChildren) {
       });
       api.setAccessToken(session.access_token);
       const profile = await api.request<UserProfile>("/users/me");
+      const pendingNewAccountSetup =
+        newlyRegisteredUserIdRef.current === profile.id ||
+        isPendingNewAccountCryptoSetup(profile.id);
       setUser(profile);
       matrixSessionRef.current = session.matrix;
       setMatrixSession(session.matrix);
+      newlyRegisteredUserIdRef.current = pendingNewAccountSetup ? profile.id : null;
+      setNewlyRegisteredUserId(pendingNewAccountSetup ? profile.id : null);
       setMode("live");
     },
     [api],
   );
 
   const register = useCallback(
-    (input: RegisterInput) =>
-      api.request<UserProfile>("/auth/register", {
+    async (input: RegisterInput) => {
+      const profile = await api.request<UserProfile>("/auth/register", {
         method: "POST",
         body: JSON.stringify(input),
-      }),
+      });
+      newlyRegisteredUserIdRef.current = profile.id;
+      try {
+        window.sessionStorage.setItem(newAccountCryptoSetupKey(profile.id), "1");
+      } catch {
+        // The in-memory marker still covers automatic sign-in in this tab.
+      }
+      return profile;
+    },
     [api],
   );
+
+  const completeNewAccountCryptoSetup = useCallback((userId: string) => {
+    if (newlyRegisteredUserIdRef.current === userId) {
+      newlyRegisteredUserIdRef.current = null;
+    }
+    try {
+      window.sessionStorage.removeItem(newAccountCryptoSetupKey(userId));
+    } catch {
+      // The setup marker is only a hint; crypto state remains authoritative.
+    }
+  }, []);
 
   const signOut = useCallback(async () => {
     const currentMode = mode;
@@ -151,6 +193,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       matrixSessionRef.current = null;
       setUser(null);
       setMatrixSession(null);
+      newlyRegisteredUserIdRef.current = null;
+      setNewlyRegisteredUserId(null);
       setMode(null);
     }
   }, [api, matrixSession, mode]);
@@ -160,6 +204,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     matrixSessionRef.current = null;
     api.setAccessToken(null);
     setMatrixSession(null);
+    newlyRegisteredUserIdRef.current = null;
+    setNewlyRegisteredUserId(null);
     setUser(demoUser);
     setMode("demo");
   }, [api]);
@@ -168,10 +214,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
     user,
     mode,
     matrixSession,
+    newlyRegisteredUserId,
     api,
     isAuthenticated: user !== null,
     signIn,
     register,
+    completeNewAccountCryptoSetup,
     signOut,
     enterDemo,
   };

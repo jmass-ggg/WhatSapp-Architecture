@@ -6,7 +6,6 @@ export type MatrixCryptoStatus =
 
 export type MatrixCryptoOnboardingStatus =
   | "checking"
-  | "save_recovery_key"
   | "restore_encryption"
   | "incomplete"
   | "ready";
