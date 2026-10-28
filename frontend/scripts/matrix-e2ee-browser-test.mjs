@@ -820,6 +820,25 @@ try {
     `PASS fresh authorized device ${sessionC.matrix.device_id} restored Bob's encrypted message history; original device ${originalBobDeviceId} remains registered`,
   );
 
+  const restoredBody = `e2ee-browser-restored-bob-to-alice-${runId}`;
+  await pageC.getByLabel("Write a message").fill(restoredBody);
+  await pageC.getByRole("button", { name: "Send message" }).click();
+  const restoredRow = pageC.locator(".message-row").filter({ hasText: restoredBody });
+  const restoredEventId = await waitForServerEventId(
+    restoredRow,
+    "Restored Bob device's message to be acknowledged by Synapse",
+  );
+  await waitFor(
+    async () =>
+      (await restoredRow.getAttribute("data-event-type")) === "m.room.encrypted",
+    "Restored Bob device's message to be encrypted",
+  );
+  await serverEvent(sessionC.matrix, roomId, restoredEventId, restoredBody);
+  await page.locator(`.message-row[data-event-id="${restoredEventId}"]`)
+    .getByText(restoredBody, { exact: true })
+    .waitFor({ state: "visible", timeout: 45_000 });
+  console.log("PASS restored Bob device sent an encrypted message that Alice decrypted");
+
   assert.deepEqual(browserErrors, []);
   assert.deepEqual(consoleErrors, []);
   assert.deepEqual(browserHttpErrors, []);
