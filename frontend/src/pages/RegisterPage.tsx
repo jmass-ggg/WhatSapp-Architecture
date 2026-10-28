@@ -27,7 +27,7 @@ function suggestedUsername(email: string): string {
 }
 
 export function RegisterPage() {
-  const { register } = useAuth();
+  const { register, signIn } = useAuth();
   const navigate = useNavigate();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -40,6 +40,7 @@ export function RegisterPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [createdLogin, setCreatedLogin] = useState<string | null>(null);
 
   useEffect(() => {
     if (!usernameEdited) setUsername(suggestedUsername(email));
@@ -83,18 +84,44 @@ export function RegisterPage() {
         password,
         display_name: fullName.trim(),
       });
-      navigate("/login", {
-        replace: true,
-        state: {
-          notice: "Your account is ready. Log in to open your Recruitable Chat and Matrix sessions.",
-          login: email.trim(),
-        },
-      });
+      const login = email.trim();
+      setCreatedLogin(login);
+      try {
+        await signIn({ login, password });
+        setPassword("");
+        navigate("/chat", { replace: true });
+      } catch (cause) {
+        setNotice("Your account was created, but automatic sign-in did not finish.");
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : "Try signing in again. Your account is safe and was not registered twice.",
+        );
+      }
     } catch (cause) {
       setError(
         cause instanceof ApiError
           ? cause.message
           : "We couldn't create your account. Check your connection and try again.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function retrySignIn() {
+    if (!createdLogin || !password) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      await signIn({ login: createdLogin, password });
+      setPassword("");
+      navigate("/chat", { replace: true });
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Sign-in could not be completed. You can use the login page to try again.",
       );
     } finally {
       setSubmitting(false);
@@ -112,17 +139,56 @@ export function RegisterPage() {
           <p>A little more room for good conversations.</p>
         </div>
 
-        {error && (
+        {!createdLogin && error && (
           <div className="form-error" role="alert">
             {error}
           </div>
         )}
-        {notice && (
+        {!createdLogin && notice && (
           <div className="form-notice" role="status">
             {notice}
           </div>
         )}
 
+        {createdLogin ? (
+          <div className="auth-form">
+            <p>
+              Your account for <strong>{createdLogin}</strong> is ready. We’re
+              signing you in so secure messaging can be set up.
+            </p>
+            {error && (
+              <div className="form-error" role="alert">
+                {error}
+              </div>
+            )}
+            {notice && (
+              <div className="form-notice" role="status">
+                {notice}
+              </div>
+            )}
+            <button
+              className="primary-button auth-submit"
+              type="button"
+              disabled={submitting || !password}
+              onClick={() => void retrySignIn()}
+            >
+              {submitting ? (
+                <>
+                  <LoaderCircle size={18} className="spin" />
+                  <span>Signing in…</span>
+                </>
+              ) : (
+                <>
+                  <span>Retry sign in</span>
+                  <ArrowRight size={18} />
+                </>
+              )}
+            </button>
+            <p className="auth-switch">
+              You can also <Link to="/login" state={{ login: createdLogin }}>continue to login</Link>.
+            </p>
+          </div>
+        ) : (
         <form className="auth-form register-form" onSubmit={handleSubmit} noValidate>
           <div className="field">
             <label htmlFor="full-name">Full name</label>
@@ -247,22 +313,27 @@ export function RegisterPage() {
             )}
           </button>
         </form>
+        )}
 
-        <div className="auth-divider"><span>OR</span></div>
-        <button
-          type="button"
-          className="secondary-button google-button"
-          onClick={() => {
-            setError("");
-            setNotice("Google sign-in is not configured for this application yet.");
-          }}
-        >
-          <span className="google-g" aria-hidden="true">G</span>
-          Continue with Google
-        </button>
-        <p className="auth-switch">
-          Already have an account? <Link to="/login">Log in</Link>
-        </p>
+        {!createdLogin && (
+          <>
+            <div className="auth-divider"><span>OR</span></div>
+            <button
+              type="button"
+              className="secondary-button google-button"
+              onClick={() => {
+                setError("");
+                setNotice("Google sign-in is not configured for this application yet.");
+              }}
+            >
+              <span className="google-g" aria-hidden="true">G</span>
+              Continue with Google
+            </button>
+            <p className="auth-switch">
+              Already have an account? <Link to="/login">Log in</Link>
+            </p>
+          </>
+        )}
       </section>
     </AuthLayout>
   );

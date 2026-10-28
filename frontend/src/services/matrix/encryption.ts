@@ -14,8 +14,14 @@ export async function createEncryptedRoom(
   client: MatrixClient,
   options: CreateEncryptedRoomOptions,
 ): Promise<string> {
-  if (!client.getCrypto()) {
+  const crypto = client.getCrypto();
+  if (!crypto) {
     throw new Error("Matrix Rust crypto is unavailable; no room was created.");
+  }
+  if (!(await crypto.isCrossSigningReady())) {
+    throw new Error(
+      "Secure recovery must be ready before creating an encrypted conversation.",
+    );
   }
   if (options.invitees.length === 0) {
     throw new Error("An encrypted room must have at least one invitee.");

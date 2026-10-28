@@ -74,16 +74,15 @@ export function MatrixSecurityDialog({
     };
   }, [manager, peerUserId, snapshot.cryptoStatus, snapshot.verification]);
 
-  async function createRecoveryKey() {
+  async function retrySetup() {
     if (!manager) return;
     setBusy(true);
     setError("");
     try {
-      await manager.prepareRecoveryKey();
-      setAcknowledged(false);
+      await manager.retryCryptoOnboarding();
     } catch {
       setError(
-        "A recovery key could not be prepared. Check the account recovery status and try again.",
+        "Secure messaging could not be checked. Check your connection and retry.",
       );
     } finally {
       setBusy(false);
@@ -211,19 +210,27 @@ export function MatrixSecurityDialog({
   }
 
   function close() {
-    if (snapshot.pendingRecoveryKey) manager?.cancelRecoveryKeySetup();
+    if (snapshot.pendingRecoveryKey) return;
     setRecoveryInput("");
     onClose();
   }
 
   const verification = snapshot.verification;
-  const canCreateBackup =
-    snapshot.keyBackupStatus === "not_configured" &&
-    snapshot.secretStorageReady !== true;
+  const onboardingTitle =
+    snapshot.cryptoOnboardingStatus === "save_recovery_key"
+      ? "Save your recovery key"
+      : snapshot.cryptoOnboardingStatus === "restore_encryption"
+        ? "Restore encryption"
+        : snapshot.cryptoOnboardingStatus === "incomplete"
+          ? "Encryption setup needs attention"
+          : "Encryption and devices";
+  const recoveryKeyRequired =
+    snapshot.cryptoOnboardingStatus === "save_recovery_key" &&
+    snapshot.pendingRecoveryKey !== null;
 
   return (
     <div className="modal-backdrop new-chat-backdrop security-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) close();
+      if (event.target === event.currentTarget && !recoveryKeyRequired) close();
     }}>
       <section
         className="security-dialog"
@@ -234,12 +241,22 @@ export function MatrixSecurityDialog({
         <header className="new-chat-dialog-header">
           <div>
             <span className="eyebrow">MATRIX SECURITY</span>
-            <h2 id="matrix-security-title">Encryption and devices</h2>
-            <p>Room encryption, identity verification, and key recovery.</p>
+            <h2 id="matrix-security-title">{onboardingTitle}</h2>
+            <p>
+              {snapshot.cryptoOnboardingStatus === "save_recovery_key"
+                ? "Save your recovery key once to finish setting up encrypted chat."
+                : snapshot.cryptoOnboardingStatus === "restore_encryption"
+                  ? "Use your existing recovery key to unlock encryption on this device."
+                  : snapshot.cryptoOnboardingStatus === "incomplete"
+                    ? "Your existing encryption data was left unchanged."
+                    : "Room encryption, identity verification, and key recovery."}
+            </p>
           </div>
-          <button type="button" className="icon-button" aria-label="Close security settings" onClick={close}>
-            <X size={19} />
-          </button>
+          {!recoveryKeyRequired && (
+            <button type="button" className="icon-button" aria-label="Close security settings" onClick={close}>
+              <X size={19} />
+            </button>
+          )}
         </header>
 
         <div className="security-dialog-content">
@@ -247,19 +264,44 @@ export function MatrixSecurityDialog({
             <LockKeyhole size={18} aria-hidden="true" />
             <div>
               <strong>
-                {snapshot.cryptoStatus === "ready"
-                  ? "Rust crypto is ready"
-                  : snapshot.cryptoStatus === "initializing"
-                    ? "Initializing Rust crypto…"
-                    : "End-to-end encryption unavailable"}
+                {snapshot.cryptoStatus === "initializing" ||
+                snapshot.cryptoOnboardingStatus === "checking"
+                  ? "Setting up secure messaging…"
+                  : snapshot.cryptoOnboardingStatus === "ready"
+                    ? "Encrypted chat ready"
+                    : snapshot.cryptoOnboardingStatus === "restore_encryption"
+                      ? "Restore encryption to continue"
+                      : snapshot.cryptoOnboardingStatus === "incomplete"
+                        ? "Encryption needs attention"
+                        : snapshot.cryptoError
+                          ? "Secure setup needs a retry"
+                          : "Save your recovery key"}
               </strong>
               <span>
-                {snapshot.cryptoStatus === "ready"
-                  ? `Device ${snapshot.deviceId ?? "unknown"} · ${snapshot.cryptoVersion ?? "Matrix Rust crypto"}`
-                  : snapshot.cryptoError ?? "Encrypted messaging is blocked until crypto is ready."}
+                {snapshot.cryptoError ??
+                  (snapshot.cryptoStatus === "ready"
+                    ? `Device ${snapshot.deviceId ?? "unknown"} · ${snapshot.cryptoVersion ?? "Matrix Rust crypto"}`
+                    : "Encrypted messaging will be available when setup finishes.")}
               </span>
             </div>
           </section>
+          {snapshot.cryptoOnboardingStatus === "incomplete" && (
+            <section className="security-section" role="status">
+              <p>
+                Recruitable Chat found existing encryption keys but could not unlock
+                them on this device. No new account keys were created. Restore
+                with your recovery key or verify another device.
+              </p>
+              <button
+                type="button"
+                className="security-button secondary"
+                disabled={busy || snapshot.cryptoStatus !== "ready"}
+                onClick={() => void retrySetup()}
+              >
+                Retry secure setup
+              </button>
+            </section>
+          )}
 
           <section className="security-section">
             <div className="security-section-heading">
@@ -295,22 +337,24 @@ export function MatrixSecurityDialog({
             {snapshot.keyBackupVersion && (
               <p>Backup version: {snapshot.keyBackupVersion}</p>
             )}
-            {canCreateBackup && !snapshot.pendingRecoveryKey && (
+            {snapshot.cryptoOnboardingStatus === "save_recovery_key" &&
+              !snapshot.pendingRecoveryKey && (
               <div>
                 <p>
-                  Create a recovery key and save it somewhere private. Losing the key can make
-                  encrypted history permanently unrecoverable.
+                  Setting up a recovery key through Matrix. Encrypted messaging
+                  remains unavailable until this finishes.
                 </p>
-                <button type="button" className="security-button" disabled={busy || snapshot.cryptoStatus !== "ready"} onClick={() => void createRecoveryKey()}>
-                  Generate recovery key
+                <button type="button" className="security-button secondary" disabled={busy || snapshot.cryptoStatus !== "ready"} onClick={() => void retrySetup()}>
+                  Retry setup
                 </button>
               </div>
             )}
             {snapshot.pendingRecoveryKey && (
               <div className="recovery-key-panel">
                 <p>
-                  Save this key now. Recruitable Chat will not store or send it. Closing this dialog discards
-                  the unsaved key.
+                  Copy this key and store it somewhere private. Recruitable Chat keeps
+                  it in memory while setup finishes and never sends it to
+                  FastAPI or stores it as plaintext.
                 </p>
                 <code>{snapshot.pendingRecoveryKey}</code>
                 <button type="button" className="security-button secondary" onClick={() => void copyRecoveryKey()}>
@@ -322,25 +366,26 @@ export function MatrixSecurityDialog({
                   I saved this recovery key in a secure place.
                 </label>
                 <button type="button" className="security-button" disabled={busy || !acknowledged} onClick={() => void enableRecovery()}>
-                  Enable secure recovery
+                  {busy ? "Finishing secure setup…" : "I saved my recovery key"}
                 </button>
               </div>
             )}
             {(snapshot.keyBackupStatus === "trusted" ||
               snapshot.keyBackupStatus === "untrusted" ||
-              snapshot.secretStorageReady === false) && (
+              snapshot.cryptoOnboardingStatus === "restore_encryption") &&
+              snapshot.cryptoOnboardingStatus !== "save_recovery_key" && (
               <div className="recovery-restore">
-                <label htmlFor="matrix-recovery-key">Restore on this device</label>
+                <label htmlFor="matrix-recovery-key">Restore encryption on this device</label>
                 <input
                   id="matrix-recovery-key"
                   type="password"
                   autoComplete="off"
                   value={recoveryInput}
                   onChange={(event) => setRecoveryInput(event.target.value)}
-                  placeholder="Enter your Matrix recovery key"
+                  placeholder="Enter your recovery key"
                 />
                 <button type="button" className="security-button secondary" disabled={busy || !recoveryInput.trim()} onClick={() => void restoreHistory()}>
-                  Restore encrypted history
+                  Restore encryption
                 </button>
               </div>
             )}

@@ -10,6 +10,9 @@ export interface UseMatrixRoomsResult {
   status: MatrixConnectionStatus;
   initialSyncComplete: boolean;
   cryptoStatus: ReturnType<typeof useMatrixContext>["cryptoStatus"];
+  cryptoOnboardingStatus: ReturnType<
+    typeof useMatrixContext
+  >["cryptoOnboardingStatus"];
   error: string | null;
   authenticationError: boolean;
   recentEvents: MatrixEventSummary[];
@@ -27,6 +30,7 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
     status,
     initialSyncComplete,
     cryptoStatus,
+    cryptoOnboardingStatus,
     error,
     authenticationError,
     recentEvents,
@@ -36,6 +40,11 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
   const createDirect = useCallback(
     async (_userId: string, _displayName: string, matrixUserId: string) => {
       if (!client) throw new Error("Sign in to start a conversation.");
+      if (cryptoStatus !== "ready" || cryptoOnboardingStatus !== "ready") {
+        throw new Error(
+          "Finish secure messaging setup before creating an encrypted conversation.",
+        );
+      }
       const pending = directRoomPromises.current.get(matrixUserId);
       if (pending) return pending;
 
@@ -67,13 +76,14 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
         }
       }
     },
-    [client],
+    [client, cryptoOnboardingStatus, cryptoStatus],
   );
   return {
     rooms,
     status,
     initialSyncComplete,
     cryptoStatus,
+    cryptoOnboardingStatus,
     error,
     authenticationError,
     recentEvents,

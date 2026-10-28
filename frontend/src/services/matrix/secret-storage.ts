@@ -61,6 +61,17 @@ export class SecretStorageKeyController {
     }
   }
 
+  hasCachedKeyMatching(keyId: string, expectedKey: Uint8Array): boolean {
+    const cached = this.cachedKeys.get(keyId);
+    if (!cached || cached.length !== expectedKey.length) return false;
+
+    let difference = 0;
+    for (let index = 0; index < cached.length; index += 1) {
+      difference |= cached[index] ^ expectedKey[index];
+    }
+    return difference === 0;
+  }
+
   clear(): void {
     for (const key of this.cachedKeys.values()) key.fill(0);
     this.cachedKeys.clear();

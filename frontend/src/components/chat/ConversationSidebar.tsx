@@ -20,6 +20,10 @@ import type {
   UserProfile,
 } from "../../types";
 import type { MatrixConnectionStatus as ConnectionStatus } from "../../services/matrix/session";
+import type {
+  MatrixCryptoOnboardingStatus,
+  MatrixCryptoStatus,
+} from "../../types/matrix";
 
 interface ConversationSidebarProps {
   conversations: Conversation[];
@@ -29,6 +33,8 @@ interface ConversationSidebarProps {
   matrixSession: MatrixSession | null;
   matrixStatus: ConnectionStatus;
   initialSyncComplete: boolean;
+  cryptoStatus: MatrixCryptoStatus;
+  cryptoOnboardingStatus: MatrixCryptoOnboardingStatus;
   authenticationError: boolean;
   incomingRequests: UserConnection[];
   requestsLoading: boolean;
@@ -50,6 +56,8 @@ export function ConversationSidebar({
   matrixSession,
   matrixStatus,
   initialSyncComplete,
+  cryptoStatus,
+  cryptoOnboardingStatus,
   authenticationError,
   incomingRequests,
   requestsLoading,
@@ -264,6 +272,8 @@ export function ConversationSidebar({
             <MatrixConnectionStatus
               status={matrixStatus}
               initialSyncComplete={initialSyncComplete}
+              cryptoStatus={cryptoStatus}
+              cryptoOnboardingStatus={cryptoOnboardingStatus}
               authenticationError={authenticationError}
               compact
             />

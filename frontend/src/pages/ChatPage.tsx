@@ -89,10 +89,20 @@ export function ChatPage() {
 
   const matrix = useMatrixRooms();
   const matrixContext = useMatrixContext();
+  const onboardingNeedsAttention =
+    matrixContext.cryptoOnboardingStatus === "save_recovery_key" ||
+    matrixContext.cryptoOnboardingStatus === "restore_encryption" ||
+    matrixContext.cryptoOnboardingStatus === "incomplete";
   const dismissToast = useCallback(() => setToast(null), []);
   const notify = useCallback((message: string, kind: ToastState["kind"] = "info") => {
     setToast({ message, kind });
   }, []);
+
+  useEffect(() => {
+    if (mode === "live" && onboardingNeedsAttention) {
+      setSecurityOpen(true);
+    }
+  }, [mode, onboardingNeedsAttention]);
 
   const refreshConnections = useCallback(
     async (showLoading = false): Promise<boolean> => {
@@ -203,7 +213,8 @@ export function ChatPage() {
       mode !== "live" ||
       !user ||
       !matrix.initialSyncComplete ||
-      matrix.cryptoStatus !== "ready"
+      matrix.cryptoStatus !== "ready" ||
+      matrixContext.cryptoOnboardingStatus !== "ready"
     ) {
       return;
     }
@@ -249,6 +260,7 @@ export function ChatPage() {
     connections,
     matrix.createDirect,
     matrix.cryptoStatus,
+    matrixContext.cryptoOnboardingStatus,
     matrix.initialSyncComplete,
     matrix.rooms,
     mode,
@@ -516,6 +528,7 @@ export function ChatPage() {
         }
         if (
           matrixContext.cryptoStatus !== "ready" ||
+          matrixContext.cryptoOnboardingStatus !== "ready" ||
           !matrixContext.client ||
           matrixContext.crossSigningReady !== true
         ) {
@@ -589,6 +602,7 @@ export function ChatPage() {
     [
       matrixContext.client,
       matrixContext.cryptoStatus,
+      matrixContext.cryptoOnboardingStatus,
       matrixContext.crossSigningReady,
       mode,
       selectedConversation,
@@ -683,6 +697,8 @@ export function ChatPage() {
           matrixSession={matrixSession}
           matrixStatus={matrix.status}
           initialSyncComplete={matrix.initialSyncComplete}
+          cryptoStatus={matrix.cryptoStatus}
+          cryptoOnboardingStatus={matrixContext.cryptoOnboardingStatus}
           authenticationError={matrix.authenticationError}
           incomingRequests={incomingRequests}
           requestsLoading={requestsLoading}
@@ -728,6 +744,8 @@ export function ChatPage() {
               <MatrixConnectionStatus
                 status={matrix.status}
                 initialSyncComplete={matrix.initialSyncComplete}
+                cryptoStatus={matrix.cryptoStatus}
+                cryptoOnboardingStatus={matrixContext.cryptoOnboardingStatus}
                 authenticationError={matrix.authenticationError}
                 error={matrix.error}
               />
@@ -798,6 +816,7 @@ export function ChatPage() {
                 mode === "live" &&
                 (isInvited || !selectedConversation.isEncrypted ||
                   matrix.cryptoStatus !== "ready" ||
+                  matrixContext.cryptoOnboardingStatus !== "ready" ||
                   matrixContext.crossSigningReady !== true ||
                   selectedRoom?.getMyMembership() !== "join" ||
                   (isDirectConversation && !directPeerJoined))
@@ -808,6 +827,8 @@ export function ChatPage() {
                 selectedConversation.isEncrypted
                   ? matrix.cryptoStatus !== "ready"
                     ? "Encryption is not ready"
+                    : matrixContext.cryptoOnboardingStatus !== "ready"
+                      ? "Finish secure messaging setup"
                     : matrixContext.crossSigningReady !== true
                       ? "Set up cross-signing to send"
                       : isDirectConversation && !directPeerJoined
@@ -822,6 +843,8 @@ export function ChatPage() {
                   ? selectedConversation.isEncrypted
                     ? matrix.cryptoStatus !== "ready"
                       ? "Encrypted sending is unavailable until Rust crypto is ready."
+                      : matrixContext.cryptoOnboardingStatus !== "ready"
+                        ? "Complete encryption recovery setup before sending messages."
                       : matrixContext.crossSigningReady !== true
                         ? "Set up secure recovery and cross-signing in Encryption and devices before sending."
                         : isDirectConversation && !directPeerJoined

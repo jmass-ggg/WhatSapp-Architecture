@@ -24,6 +24,7 @@ import type { Device } from "matrix-js-sdk";
 
 import type { Conversation, MatrixSession } from "../../types";
 import type {
+  MatrixCryptoOnboardingStatus,
   MatrixCryptoStatus,
   MatrixKeyBackupStatus,
   MatrixVerificationSnapshot,
@@ -71,6 +72,7 @@ export interface MatrixConnectionSnapshot {
   error: string | null;
   authenticationError: boolean;
   cryptoStatus: MatrixCryptoStatus;
+  cryptoOnboardingStatus: MatrixCryptoOnboardingStatus;
   cryptoError: string | null;
   cryptoVersion: string | null;
   deviceId: string | null;
@@ -91,6 +93,7 @@ export const EMPTY_MATRIX_CONNECTION_SNAPSHOT: MatrixConnectionSnapshot = {
   error: null,
   authenticationError: false,
   cryptoStatus: "disabled",
+  cryptoOnboardingStatus: "checking",
   cryptoError: null,
   cryptoVersion: null,
   deviceId: null,
@@ -147,6 +150,9 @@ export class MatrixClientSession {
   private cryptoStoreIdentity: MatrixCryptoStoreIdentity | null = null;
   private pendingGeneratedRecoveryKey: GeneratedSecretStorageKey | null = null;
   private pendingRecoveryKeyDisplay: string | null = null;
+  private recoveryKeyPreparation: Promise<string> | null = null;
+  private cryptoOnboardingAttempt: Promise<void> | null = null;
+  private cryptoOnboardingEvaluated = false;
   private readonly verificationRequests = new Map<
     string,
     {
@@ -185,6 +191,7 @@ export class MatrixClientSession {
     ...EMPTY_MATRIX_CONNECTION_SNAPSHOT,
     status: "connecting",
     cryptoStatus: "initializing",
+    cryptoOnboardingStatus: "checking",
   };
   private listeners = new Set<SnapshotListener>();
 
@@ -207,6 +214,9 @@ export class MatrixClientSession {
           authenticationError: false,
         });
         void this.refreshCryptoStatus();
+        if (!this.cryptoOnboardingEvaluated) {
+          void this.checkCryptoOnboarding();
+        }
         break;
       case syncStates.Syncing:
         this.publish({
@@ -315,6 +325,21 @@ export class MatrixClientSession {
   readonly getSnapshot = (): MatrixConnectionSnapshot => this.snapshot;
 
   async prepareRecoveryKey(): Promise<string> {
+    if (this.pendingRecoveryKeyDisplay) return this.pendingRecoveryKeyDisplay;
+    if (this.recoveryKeyPreparation) return this.recoveryKeyPreparation;
+
+    const preparation = this.createRecoveryKey();
+    this.recoveryKeyPreparation = preparation;
+    try {
+      return await preparation;
+    } finally {
+      if (this.recoveryKeyPreparation === preparation) {
+        this.recoveryKeyPreparation = null;
+      }
+    }
+  }
+
+  private async createRecoveryKey(): Promise<string> {
     const crypto = this.requireCrypto();
     const [secretStorageStatus, backupInfo, crossSigningStatus] =
       await Promise.all([
@@ -329,12 +354,12 @@ export class MatrixClientSession {
       );
     }
     if (
-      crossSigningStatus.publicKeysOnDevice &&
-      !crossSigningStatus.privateKeysInSecretStorage &&
-      !Object.values(crossSigningStatus.privateKeysCachedLocally).some(Boolean)
+      crossSigningStatus.publicKeysOnDevice ||
+      crossSigningStatus.privateKeysInSecretStorage ||
+      Object.values(crossSigningStatus.privateKeysCachedLocally).some(Boolean)
     ) {
       throw new Error(
-        "Existing cross-signing keys are unavailable on this device. Restore the account's recovery key before creating new keys.",
+        "Existing cross-signing keys were detected. Restore the account's recovery key instead of creating new keys.",
       );
     }
 
@@ -366,9 +391,21 @@ export class MatrixClientSession {
         crypto.getSecretStorageStatus(),
         crypto.getKeyBackupInfo(),
       ]);
-      if (secretStorageStatus.defaultKeyId || existingBackup) {
+      const existingKeyId = secretStorageStatus.defaultKeyId;
+      if (
+        existingKeyId &&
+        !this.secretStorageKeys.hasCachedKeyMatching(
+          existingKeyId,
+          generated.privateKey,
+        )
+      ) {
         throw new Error(
-          "Server-side key storage changed during setup. Existing recovery data was left untouched.",
+          "Existing secret storage was detected. Its recovery data was left untouched.",
+        );
+      }
+      if (existingBackup && !existingKeyId) {
+        throw new Error(
+          "An existing key backup was detected. Its recovery data was left untouched.",
         );
       }
 
@@ -391,11 +428,19 @@ export class MatrixClientSession {
       if (!backupCheck?.trustInfo.trusted) {
         throw new Error("The new key backup could not be trusted.");
       }
+      if (!(await crypto.isSecretStorageReady())) {
+        throw new Error("Secret storage was not ready after setup.");
+      }
 
-      this.publish({ cryptoError: null });
+      this.cryptoOnboardingEvaluated = true;
+      this.publish({
+        cryptoError: null,
+        cryptoOnboardingStatus: "ready",
+      });
       await this.refreshCryptoStatus();
     } catch {
       this.publish({
+        cryptoOnboardingStatus: "save_recovery_key",
         cryptoError:
           "Secure recovery setup did not complete. No message will be sent without room encryption. Check the server's interactive-auth requirements and try again.",
       });
@@ -403,10 +448,10 @@ export class MatrixClientSession {
         "Secure recovery setup did not complete. Existing server backup data was not reset.",
       );
     } finally {
-      this.clearPendingRecoveryKey();
-      this.publish({ pendingRecoveryKey: null });
       await this.refreshCryptoStatus();
     }
+    this.clearPendingRecoveryKey();
+    this.publish({ pendingRecoveryKey: null, cryptoOnboardingStatus: "ready" });
   }
 
   cancelRecoveryKeySetup(): void {
@@ -473,6 +518,8 @@ export class MatrixClientSession {
           const result = await crypto.restoreKeyBackup();
           await this.refreshCryptoStatus();
           this.publish({ cryptoError: null });
+          this.cryptoOnboardingEvaluated = false;
+          await this.checkCryptoOnboarding();
           return result;
         },
       );
@@ -586,6 +633,123 @@ export class MatrixClientSession {
     this.pendingGeneratedRecoveryKey?.privateKey.fill(0);
     this.pendingGeneratedRecoveryKey = null;
     this.pendingRecoveryKeyDisplay = null;
+  }
+
+  async retryCryptoOnboarding(): Promise<void> {
+    if (this.snapshot.cryptoStatus !== "ready") {
+      throw new Error("Secure messaging is still initializing. Try again shortly.");
+    }
+    this.cryptoOnboardingEvaluated = false;
+    await this.checkCryptoOnboarding();
+  }
+
+  private async checkCryptoOnboarding(): Promise<void> {
+    if (this.disposed || this.cryptoOnboardingEvaluated) return;
+    if (this.cryptoOnboardingAttempt) return this.cryptoOnboardingAttempt;
+
+    const attempt = (async () => {
+      const crypto = this.crypto;
+      if (!crypto || this.snapshot.cryptoStatus !== "ready") return;
+
+      try {
+        const [
+          crossSigningReady,
+          secretStorageStatus,
+          backupCheck,
+          backupInfo,
+          crossSigningStatus,
+        ] = await Promise.all([
+          crypto.isCrossSigningReady(),
+          crypto.getSecretStorageStatus(),
+          crypto.checkKeyBackupAndEnable(),
+          crypto.getKeyBackupInfo(),
+          crypto.getCrossSigningStatus(),
+        ]);
+        if (this.disposed) return;
+
+        const currentBackup = backupCheck?.backupInfo ?? backupInfo;
+        const backupTrust = currentBackup
+          ? backupCheck?.trustInfo ??
+            (await crypto.isKeyBackupTrusted(currentBackup))
+          : null;
+        const backupTrusted = backupTrust?.trusted === true;
+        const hasCrossSigningKeys =
+          crossSigningStatus.publicKeysOnDevice ||
+          crossSigningStatus.privateKeysInSecretStorage ||
+          Object.values(crossSigningStatus.privateKeysCachedLocally).some(
+            Boolean,
+          );
+
+        if (
+          crossSigningReady &&
+          (!currentBackup || backupTrusted)
+        ) {
+          this.publish({
+            crossSigningReady,
+            secretStorageReady: secretStorageStatus.ready,
+            keyBackupStatus: !currentBackup
+              ? "not_configured"
+              : "trusted",
+            keyBackupVersion: currentBackup?.version ?? null,
+            cryptoOnboardingStatus: "ready",
+            cryptoError: null,
+          });
+          this.cryptoOnboardingEvaluated = true;
+          return;
+        }
+
+        const accountHasRecoveryState =
+          Boolean(secretStorageStatus.defaultKeyId) ||
+          Boolean(currentBackup) ||
+          hasCrossSigningKeys ||
+          secretStorageStatus.ready;
+        if (!accountHasRecoveryState) {
+          this.publish({
+            crossSigningReady,
+            secretStorageReady: secretStorageStatus.ready,
+            keyBackupStatus: "not_configured",
+            keyBackupVersion: null,
+            cryptoOnboardingStatus: "save_recovery_key",
+            cryptoError: null,
+          });
+          await this.prepareRecoveryKey();
+          this.cryptoOnboardingEvaluated = true;
+          return;
+        }
+
+        this.publish({
+          crossSigningReady,
+          secretStorageReady: secretStorageStatus.ready,
+          keyBackupStatus: !currentBackup
+            ? "not_configured"
+            : backupTrusted
+              ? "trusted"
+              : "untrusted",
+          keyBackupVersion: currentBackup?.version ?? null,
+          cryptoOnboardingStatus:
+            secretStorageStatus.defaultKeyId || currentBackup
+              ? "restore_encryption"
+              : "incomplete",
+          cryptoError: null,
+        });
+        this.cryptoOnboardingEvaluated = true;
+      } catch {
+        if (this.disposed) return;
+        this.publish({
+          cryptoOnboardingStatus: "incomplete",
+          cryptoError:
+            "Secure messaging setup could not be checked. Retry setup when your connection is available.",
+        });
+      }
+    })();
+    this.cryptoOnboardingAttempt = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.cryptoOnboardingAttempt === attempt) {
+        this.cryptoOnboardingAttempt = null;
+      }
+    }
   }
 
   private async refreshCryptoStatus(): Promise<void> {

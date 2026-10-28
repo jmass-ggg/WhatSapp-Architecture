@@ -11,10 +11,14 @@ import { useSyncExternalStore } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   encodeRecoveryKey,
+  OnlySignedDevicesIsolationMode,
   VerificationPhase,
   VerificationRequestEvent,
 } from "matrix-js-sdk/lib/crypto-api/index.js";
-import type { SecretStorageStatus } from "matrix-js-sdk/lib/crypto-api/index.js";
+import type {
+  CryptoCallbacks,
+  SecretStorageStatus,
+} from "matrix-js-sdk/lib/crypto-api/index.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { MatrixSession } from "../../types";
@@ -44,6 +48,19 @@ const fakeCrypto = {
   }),
   getKeyBackupInfo: async () => null,
   checkKeyBackupAndEnable: async () => null,
+  isKeyBackupTrusted: async () => ({ trusted: true }),
+  createRecoveryKeyFromPassphrase: vi.fn(async () => {
+    const privateKey = new Uint8Array(32).fill(29);
+    return {
+      privateKey,
+      encodedPrivateKey: encodeRecoveryKey(privateKey),
+    };
+  }),
+  bootstrapSecretStorage: vi.fn(async () => undefined),
+  bootstrapCrossSigning: vi.fn(async () => undefined),
+  resetKeyBackup: vi.fn(async () => undefined),
+  loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => undefined),
+  restoreKeyBackup: vi.fn(async () => ({ imported: 0, total: 0 })),
   requestVerificationDM: vi.fn(),
   getCrossSigningStatus: async () => ({
     publicKeysOnDevice: false,
@@ -81,11 +98,16 @@ class FakeMatrixClient {
     user_id: this.userId,
     device_id: this.deviceId,
   }));
+  readonly secretStorage = {
+    getDefaultKeyId: vi.fn(async () => null),
+  };
+  cryptoCallbacks: CryptoCallbacks | undefined;
   rooms: Room[] = [];
 
   constructor(
     private readonly userId: string,
     private readonly deviceId: string,
+    private readonly cryptoApi: object = fakeCrypto,
   ) {}
 
   on(event: string, listener: Listener): this {
@@ -119,7 +141,7 @@ class FakeMatrixClient {
   }
 
   getCrypto() {
-    return fakeCrypto;
+    return this.cryptoApi;
   }
 
   getRooms(): Room[] {
@@ -132,8 +154,10 @@ class FakeMatrixClient {
 }
 
 function factoryFor(client: FakeMatrixClient): MatrixClientFactory {
-  return (_options: IMatrixClientCreateOpts) =>
-    client as unknown as MatrixClient;
+  return (options: IMatrixClientCreateOpts) => {
+    client.cryptoCallbacks = options.cryptoCallbacks;
+    return client as unknown as MatrixClient;
+  };
 }
 
 function room(roomId: string, name: string): Room {
@@ -172,6 +196,273 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("Matrix client session lifecycle", () => {
+  it("automatically prepares one recovery key for a new account and completes setup", async () => {
+    const generatedKey = new Uint8Array(32).fill(61);
+    const generated = {
+      privateKey: generatedKey,
+      encodedPrivateKey: encodeRecoveryKey(generatedKey),
+    };
+    let defaultKeyId: string | null = null;
+    let secretStorageReady = false;
+    let crossSigningReady = false;
+    let failCrossSigningOnce = true;
+    let backupInfo: { version: string } | null = null;
+    let client!: FakeMatrixClient;
+    const crypto = {
+      ...fakeCrypto,
+      isCrossSigningReady: vi.fn(async () => crossSigningReady),
+      isSecretStorageReady: vi.fn(async () => secretStorageReady),
+      getSecretStorageStatus: vi.fn(async () => ({
+        ready: secretStorageReady,
+        defaultKeyId,
+        secretStorageKeyValidityMap: {},
+      })),
+      getKeyBackupInfo: vi.fn(async () => backupInfo as never),
+      checkKeyBackupAndEnable: vi.fn(async () =>
+        backupInfo
+          ? ({ backupInfo, trustInfo: { trusted: true } } as never)
+          : null,
+      ),
+      getCrossSigningStatus: vi.fn(async () => ({
+        publicKeysOnDevice: crossSigningReady,
+        privateKeysInSecretStorage: secretStorageReady,
+        privateKeysCachedLocally: {
+          masterKey: false,
+          selfSigningKey: false,
+          userSigningKey: false,
+        },
+      })),
+      createRecoveryKeyFromPassphrase: vi.fn(async () => generated),
+      bootstrapSecretStorage: vi.fn(async (options: {
+        createSecretStorageKey?: () => Promise<typeof generated>;
+      }) => {
+        if (!defaultKeyId) {
+          const stored = await options.createSecretStorageKey?.();
+          defaultKeyId = "secret-storage-key";
+          if (stored) {
+            client.cryptoCallbacks?.cacheSecretStorageKey?.(
+              defaultKeyId,
+              {} as never,
+              stored.privateKey,
+            );
+          }
+        }
+        secretStorageReady = true;
+      }),
+      bootstrapCrossSigning: vi.fn(async () => {
+        if (failCrossSigningOnce) {
+          failCrossSigningOnce = false;
+          throw new Error("temporary upload failure");
+        }
+        crossSigningReady = true;
+      }),
+      resetKeyBackup: vi.fn(async () => {
+        backupInfo = { version: "backup-version" };
+      }),
+      isKeyBackupTrusted: vi.fn(async () => ({ trusted: true })),
+    };
+    client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
+    const manager = new MatrixClientSession(
+      matrixSession(),
+      userA,
+      factoryFor(client),
+      testLockProvider,
+    );
+    await waitForStart(client);
+
+    act(() => {
+      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+    });
+    await waitFor(() =>
+      expect(manager.getSnapshot()).toMatchObject({
+        cryptoOnboardingStatus: "save_recovery_key",
+        pendingRecoveryKey: generated.encodedPrivateKey,
+      }),
+    );
+    expect(crypto.createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
+    expect(client.initRustCrypto).toHaveBeenCalledTimes(1);
+
+    await expect(manager.confirmRecoveryKeySaved()).rejects.toThrow(
+      /secure recovery setup did not complete/i,
+    );
+    expect(manager.getSnapshot().pendingRecoveryKey).toBe(
+      generated.encodedPrivateKey,
+    );
+
+    await manager.confirmRecoveryKeySaved();
+
+    expect(crypto.createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
+    expect(crypto.bootstrapSecretStorage).toHaveBeenCalledTimes(2);
+    expect(crypto.bootstrapCrossSigning).toHaveBeenCalledTimes(2);
+    expect(crypto.resetKeyBackup).toHaveBeenCalledTimes(1);
+    expect(manager.getSnapshot()).toMatchObject({
+      cryptoOnboardingStatus: "ready",
+      pendingRecoveryKey: null,
+      crossSigningReady: true,
+      secretStorageReady: true,
+      keyBackupStatus: "trusted",
+    });
+    manager.dispose();
+  });
+
+  it("preserves detected signing keys and asks for recovery instead of generating new keys", async () => {
+    const createRecoveryKey = vi.fn(async () => {
+      const privateKey = new Uint8Array(32).fill(37);
+      return {
+        privateKey,
+        encodedPrivateKey: encodeRecoveryKey(privateKey),
+      };
+    });
+    const crypto = {
+      ...fakeCrypto,
+      getCrossSigningStatus: async () => ({
+        publicKeysOnDevice: true,
+        privateKeysInSecretStorage: false,
+        privateKeysCachedLocally: {
+          masterKey: false,
+          selfSigningKey: false,
+          userSigningKey: false,
+        },
+      }),
+      createRecoveryKeyFromPassphrase: createRecoveryKey,
+    };
+    const client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
+    const manager = new MatrixClientSession(
+      matrixSession(),
+      userA,
+      factoryFor(client),
+      testLockProvider,
+    );
+    await waitForStart(client);
+
+    act(() => {
+      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+    });
+    await waitFor(() =>
+      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("incomplete"),
+    );
+
+    expect(createRecoveryKey).not.toHaveBeenCalled();
+    expect(manager.getSnapshot().pendingRecoveryKey).toBeNull();
+    await expect(manager.prepareRecoveryKey()).rejects.toThrow(
+      /existing cross-signing keys were detected/i,
+    );
+    expect(createRecoveryKey).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("retries automatic recovery setup after a transient SDK failure", async () => {
+    const privateKey = new Uint8Array(32).fill(45);
+    const createRecoveryKey = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary SDK error"))
+      .mockResolvedValueOnce({
+        privateKey,
+        encodedPrivateKey: encodeRecoveryKey(privateKey),
+      });
+    const crypto = {
+      ...fakeCrypto,
+      createRecoveryKeyFromPassphrase: createRecoveryKey,
+    };
+    const client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
+    const manager = new MatrixClientSession(
+      matrixSession(),
+      userA,
+      factoryFor(client),
+      testLockProvider,
+    );
+    await waitForStart(client);
+
+    act(() => {
+      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+    });
+    await waitFor(() =>
+      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("incomplete"),
+    );
+    await manager.retryCryptoOnboarding();
+
+    expect(createRecoveryKey).toHaveBeenCalledTimes(2);
+    expect(manager.getSnapshot()).toMatchObject({
+      cryptoOnboardingStatus: "save_recovery_key",
+      pendingRecoveryKey: encodeRecoveryKey(privateKey),
+    });
+    manager.dispose();
+  });
+
+  it("restores existing encryption on a new device without generating account keys", async () => {
+    const recoveryBytes = new Uint8Array(32).fill(77);
+    const recoveryKey = encodeRecoveryKey(recoveryBytes);
+    if (!recoveryKey) throw new Error("The test recovery key was not encoded.");
+    const backupInfo = { version: "existing-backup" };
+    let crossSigningReady = false;
+    const createRecoveryKey = vi.fn();
+    const crypto = {
+      ...fakeCrypto,
+      isCrossSigningReady: vi.fn(async () => crossSigningReady),
+      isSecretStorageReady: vi.fn(async () => true),
+      getSecretStorageStatus: vi.fn(async () => ({
+        ready: false,
+        defaultKeyId: "existing-secret-storage-key",
+        secretStorageKeyValidityMap: {},
+      })),
+      getKeyBackupInfo: vi.fn(async () => backupInfo as never),
+      checkKeyBackupAndEnable: vi.fn(async () => ({
+        backupInfo,
+        trustInfo: { trusted: true },
+      }) as never),
+      getCrossSigningStatus: vi.fn(async () => ({
+        publicKeysOnDevice: true,
+        privateKeysInSecretStorage: true,
+        privateKeysCachedLocally: {
+          masterKey: false,
+          selfSigningKey: false,
+          userSigningKey: false,
+        },
+      })),
+      createRecoveryKeyFromPassphrase: createRecoveryKey,
+      bootstrapCrossSigning: vi.fn(async () => {
+        crossSigningReady = true;
+      }),
+      loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => undefined),
+      restoreKeyBackup: vi.fn(async () => ({ imported: 4, total: 4 })),
+    };
+    const isolationMode = vi.fn();
+    const client = new FakeMatrixClient(userA, "DEVICE_NEW", {
+      ...crypto,
+      setDeviceIsolationMode: isolationMode,
+    });
+    const manager = new MatrixClientSession(
+      matrixSession(userA, "DEVICE_NEW", "new-device-token"),
+      userA,
+      factoryFor(client),
+      testLockProvider,
+    );
+    await waitForStart(client);
+
+    act(() => {
+      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+    });
+    await waitFor(() =>
+      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe(
+        "restore_encryption",
+      ),
+    );
+
+    const restored = await manager.restoreFromRecoveryKey(recoveryKey);
+
+    expect(restored).toEqual({ imported: 4, total: 4 });
+    expect(createRecoveryKey).not.toHaveBeenCalled();
+    expect(crypto.bootstrapCrossSigning).toHaveBeenCalledTimes(1);
+    expect(crypto.loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledOnce();
+    expect(crypto.restoreKeyBackup).toHaveBeenCalledOnce();
+    expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("ready");
+    expect(isolationMode).toHaveBeenCalledWith(
+      expect.any(OnlySignedDevicesIsolationMode),
+    );
+    manager.dispose();
+  });
+
   it("waits for PREPARED before marking the first sync complete", async () => {
     const registry = new MatrixClientRegistry(testLockProvider);
     const client = new FakeMatrixClient(userA, "DEVICE_A");

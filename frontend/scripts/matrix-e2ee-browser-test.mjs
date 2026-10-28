@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import * as sdk from "matrix-js-sdk";
-import {
-  CryptoEvent,
-  VerifierEvent,
-} from "matrix-js-sdk/lib/crypto-api/index.js";
 import { chromium } from "playwright-core";
 
 const apiBaseUrl = process.env.LUMACHAT_TEST_API_URL?.replace(/\/+$/, "");
@@ -27,25 +22,62 @@ const chromiumPath =
   process.env.CHROMIUM_EXECUTABLE || "/usr/bin/chromium-browser";
 const runId = randomUUID().replaceAll("-", "").slice(0, 12);
 const password = `Step07-browser-${randomUUID()}!`;
-const logger = {
-  trace: () => undefined,
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-  getChild: () => logger,
-};
+// Synapse's effective rc_login.address default refills at 0.003 requests/sec.
+const minimumLoginIntervalMs = 350_000;
 
 let browser;
+let browserContext;
 let page;
-let clientB;
+let pageB;
+let pageC;
+let browserContextB;
+let browserContextC;
 let browserErrors = [];
 let consoleErrors = [];
 let browserHttpErrors = [];
+let browserAuthRequests = [];
 let unsupportedRtcTransportResponses = 0;
 let expectedE2eeSetupResponses = 0;
 let genericNotFoundConsoleErrors = 0;
 let browserOffline = false;
+let lastLoginAttemptAt = 0;
+
+async function respectMatrixLoginRateLimit() {
+  const waitMs = Math.max(
+    0,
+    lastLoginAttemptAt + minimumLoginIntervalMs - Date.now(),
+  );
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  lastLoginAttemptAt = Date.now();
+}
+
+function waitForLoginResponse(targetPage) {
+  return targetPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/auth/login") &&
+      response.request().method() === "POST",
+    { timeout: 60_000 },
+  );
+}
+
+async function retryLimitedLogin(targetPage, initialResponse, buttonName) {
+  let response = initialResponse;
+  lastLoginAttemptAt = Date.now();
+  for (let attempt = 0; response.status() !== 200 && attempt < 2; attempt += 1) {
+    if (response.status() !== 429 && response.status() !== 503) break;
+    console.log(
+      `RETRY login returned HTTP ${response.status()}; waiting for the Matrix login interval`,
+    );
+    const button = targetPage.getByRole("button", { name: buttonName });
+    await button.waitFor({ state: "visible", timeout: 20_000 });
+    await respectMatrixLoginRateLimit();
+    const nextResponse = waitForLoginResponse(targetPage);
+    await button.click();
+    response = await nextResponse;
+    lastLoginAttemptAt = Date.now();
+  }
+  return response;
+}
 
 function isExpectedE2eeSetupNotFound(responseUrl) {
   const path = new URL(responseUrl).pathname;
@@ -61,83 +93,118 @@ function expectedMatrixUserId(appUserId) {
   return `@u_${appUserId.replaceAll("-", "").toLowerCase()}:${matrixServerName}`;
 }
 
-async function registerUser(label) {
+async function registerThroughUi(label, targetPage = page) {
   const username = `step07_browser_${label}_${runId}`;
-  const response = await fetch(`${apiBaseUrl}/auth/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: `${username}@example.com`,
-      username,
-      password,
-      display_name: `Step 07 Browser ${label} ${runId}`,
-    }),
-  });
-  if (response.status !== 201) {
-    throw new Error(`Synthetic browser user registration failed with HTTP ${response.status}.`);
+  await targetPage.goto(`${webUrl}/register`);
+  await targetPage.getByLabel("Full name").fill(`Step 07 Browser ${label} ${runId}`);
+  await targetPage.getByLabel("Email address").fill(`${username}@example.com`);
+  await targetPage.getByLabel("Username").fill(username);
+  await targetPage.getByLabel("Password", { exact: true }).fill(password);
+  await targetPage.getByLabel("Confirm password").fill(password);
+  await targetPage.getByLabel(/I agree to the/).check();
+  await respectMatrixLoginRateLimit();
+  const registrationPromise = targetPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/auth/register") &&
+      response.request().method() === "POST",
+  );
+  const loginResponsePromise = waitForLoginResponse(targetPage).catch(
+    (error) => ({ waitError: error }),
+  );
+  await targetPage.getByRole("button", { name: "Create Account" }).click();
+
+  let registration;
+  try {
+    registration = await registrationPromise;
+  } catch (cause) {
+    const formErrors = await targetPage
+      .locator('[role="alert"]')
+      .allTextContents()
+      .catch(() => []);
+    throw new Error(
+      `Registration request did not complete at ${targetPage.url()}. Form errors: ${formErrors.join(" | ") || "none"}`,
+      { cause },
+    );
   }
-  const profile = await response.json();
+  assert.equal(registration.status(), 201);
+  const profile = await registration.json();
+  const loginResponseResult = await loginResponsePromise;
+  if ("waitError" in loginResponseResult) {
+    const notices = await targetPage
+      .locator('[role="alert"], [role="status"]')
+      .allTextContents()
+      .catch(() => []);
+    throw new Error(
+      `Automatic login request did not complete at ${targetPage.url()}. Notices: ${notices.join(" | ") || "none"}. Auth requests observed: ${browserAuthRequests.join(", ") || "none"}`,
+      { cause: loginResponseResult.waitError },
+    );
+  }
+  const loginResponse = await retryLimitedLogin(
+    targetPage,
+    loginResponseResult,
+    "Retry sign in",
+  );
+  assert.equal(loginResponse.status(), 200);
+  const payload = await loginResponse.json();
+  assert.equal(payload.matrix.user_id, expectedMatrixUserId(profile.id));
+  assert.ok(payload.access_token);
+  assert.ok(payload.matrix.access_token);
+  assert.ok(payload.matrix.device_id);
+  await targetPage.waitForURL("**/chat", { timeout: 20_000 });
+  await targetPage.locator(".recovery-key-panel code").waitFor({
+    state: "visible",
+    timeout: 45_000,
+  });
   return {
-    id: profile.id,
-    username,
-    displayName: profile.profile?.display_name ?? username,
+    account: {
+      id: profile.id,
+      username,
+      displayName: profile.profile?.display_name ?? username,
+    },
+    appAccessToken: payload.access_token,
+    matrix: payload.matrix,
   };
 }
 
-async function loginUser(account) {
-  const response = await fetch(`${apiBaseUrl}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ login: account.username, password }),
-  });
-  if (!response.ok) {
-    throw new Error(`Synthetic browser user login failed with HTTP ${response.status}.`);
+async function loginThroughUi(account, targetPage = page) {
+  const authRequestStart = browserAuthRequests.length;
+  await respectMatrixLoginRateLimit();
+  await targetPage.goto(`${webUrl}/login`);
+  await targetPage.getByLabel("Email or username").fill(account.username);
+  await targetPage.getByLabel("Password", { exact: true }).fill(password);
+  const loginResponsePromise = waitForLoginResponse(targetPage);
+  await targetPage.getByRole("button", { name: "Log In" }).click();
+
+  let firstResponse;
+  try {
+    firstResponse = await loginResponsePromise;
+  } catch (cause) {
+    const notices = await targetPage
+      .locator('[role="alert"], [role="status"]')
+      .allTextContents()
+      .catch(() => []);
+    throw new Error(
+      `Login response did not complete at ${targetPage.url()}. Notices: ${notices.join(" | ") || "none"}. Auth requests from this page: ${browserAuthRequests.slice(authRequestStart).join(", ") || "none"}`,
+      { cause },
+    );
   }
-  const payload = await response.json();
-  assert.equal(payload.matrix.user_id, expectedMatrixUserId(account.id));
-  assert.ok(payload.matrix.device_id);
-  assert.ok(payload.matrix.access_token);
-  return { ...account, matrix: payload.matrix };
-}
-
-async function signInThroughUi(account) {
-  await page.goto(`${webUrl}/login`);
-  const loginResponsePromise = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname.endsWith("/auth/login") &&
-      response.request().method() === "POST",
+  const loginResponse = await retryLimitedLogin(
+    targetPage,
+    firstResponse,
+    "Log In",
   );
-  await page.getByLabel("Email or username").fill(account.username);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Log In" }).click();
-  const response = await loginResponsePromise;
-  assert.equal(response.status(), 200);
-  const payload = await response.json();
+  assert.equal(loginResponse.status(), 200);
+  const payload = await loginResponse.json();
   assert.equal(payload.matrix.user_id, expectedMatrixUserId(account.id));
-  await page.waitForURL("**/chat", { timeout: 20_000 });
-  await page.getByRole("status").filter({ hasText: "Connected to Matrix" }).first().waitFor({
-    state: "visible",
-    timeout: 30_000,
-  });
-  return payload.matrix;
-}
-
-async function startSync(client) {
-  const prepared = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      client.removeListener(sdk.ClientEvent.Sync, onSync);
-      reject(new Error("Matrix SDK client did not reach PREPARED."));
-    }, 30_000);
-    const onSync = (state) => {
-      if (state !== sdk.SyncState.Prepared) return;
-      clearTimeout(timer);
-      client.removeListener(sdk.ClientEvent.Sync, onSync);
-      resolve();
-    };
-    client.on(sdk.ClientEvent.Sync, onSync);
-  });
-  await client.startClient({ initialSyncLimit: 50, pollTimeout: 30_000 });
-  await prepared;
+  assert.ok(payload.access_token);
+  assert.ok(payload.matrix.access_token);
+  assert.ok(payload.matrix.device_id);
+  await targetPage.waitForURL("**/chat", { timeout: 20_000 });
+  return {
+    ...account,
+    appAccessToken: payload.access_token,
+    matrix: payload.matrix,
+  };
 }
 
 async function waitFor(predicate, label, timeoutMs = 30_000) {
@@ -150,38 +217,30 @@ async function waitFor(predicate, label, timeoutMs = 30_000) {
   throw new Error(`Timed out waiting for ${label}.`);
 }
 
-async function serverEvent(session, roomId, eventId, plaintext) {
-  const response = await fetch(
-    `${matrixUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`,
-    { headers: { Authorization: `Bearer ${session.access_token}` } },
-  );
-  assert.equal(response.status, 200);
-  const event = await response.json();
-  assert.equal(event.type, "m.room.encrypted");
-  assert.equal(event.room_id, roomId);
-  assert.equal(event.event_id, eventId);
-  assert.equal(event.content.algorithm, "m.megolm.v1.aes-sha2");
-  assert.equal(typeof event.content.ciphertext, "string");
-  assert.equal(JSON.stringify(event).includes(plaintext), false);
-  return event;
+async function waitForServerEventId(row, label) {
+  return waitFor(async () => {
+    const eventId = await row.getAttribute("data-event-id");
+    return eventId && !eventId.startsWith("~") ? eventId : null;
+  }, label, 30_000);
 }
 
-async function createEncryptedDirectRoom(client, inviteeUserId, name) {
-  const created = await client.createRoom({
-    visibility: sdk.Visibility.Private,
-    preset: sdk.Preset.PrivateChat,
-    is_direct: true,
-    invite: [inviteeUserId],
-    name,
-    initial_state: [
-      {
-        type: "m.room.encryption",
-        state_key: "",
-        content: { algorithm: "m.megolm.v1.aes-sha2" },
-      },
-    ],
-  });
-  return created.room_id;
+async function serverEvent(session, roomId, eventId, plaintext) {
+  return waitFor(async () => {
+    const response = await fetch(
+      `${matrixUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`,
+      { headers: { Authorization: `Bearer ${session.access_token}` } },
+    );
+    if (response.status === 404) return null;
+    assert.equal(response.status, 200);
+    const event = await response.json();
+    assert.equal(event.type, "m.room.encrypted");
+    assert.equal(event.room_id, roomId);
+    assert.equal(event.event_id, eventId);
+    assert.equal(event.content.algorithm, "m.megolm.v1.aes-sha2");
+    assert.equal(typeof event.content.ciphertext, "string");
+    assert.equal(JSON.stringify(event).includes(plaintext), false);
+    return event;
+  }, `encrypted event ${eventId} to reach Synapse`, 15_000);
 }
 
 async function joinInvitedRoom(session, roomId) {
@@ -201,168 +260,180 @@ async function joinInvitedRoom(session, roomId) {
   assert.equal(result.room_id, roomId);
 }
 
-function waitForVerificationRequest(client) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      client.removeListener(CryptoEvent.VerificationRequestReceived, onRequest);
-      reject(new Error("Timed out waiting for User B's verification request."));
-    }, 20_000);
-    const onRequest = (request) => {
-      clearTimeout(timer);
-      client.removeListener(CryptoEvent.VerificationRequestReceived, onRequest);
-      resolve(request);
-    };
-    client.on(CryptoEvent.VerificationRequestReceived, onRequest);
-  });
+async function sendTyping(session, roomId, isTyping) {
+  const response = await fetch(
+    `${matrixUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/typing/${encodeURIComponent(session.user_id)}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        isTyping ? { typing: true, timeout: 15_000 } : { typing: false },
+      ),
+    },
+  );
+  assert.ok(response.ok, "Matrix should accept the synthetic typing indicator");
 }
 
-function waitForSas(verifier) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      verifier.removeListener(VerifierEvent.ShowSas, onShowSas);
-      verifier.removeListener(VerifierEvent.Cancel, onCancel);
-      reject(new Error("Timed out waiting for the SAS comparison."));
-    }, 20_000);
-    const onShowSas = (callbacks) => {
-      clearTimeout(timer);
-      verifier.removeListener(VerifierEvent.Cancel, onCancel);
-      resolve(callbacks);
-    };
-    const onCancel = () => {
-      clearTimeout(timer);
-      verifier.removeListener(VerifierEvent.ShowSas, onShowSas);
-      reject(new Error("The SAS verification was cancelled."));
-    };
-    verifier.on(VerifierEvent.ShowSas, onShowSas);
-    verifier.on(VerifierEvent.Cancel, onCancel);
+async function verifyPeerInBrowser(initiatorPage, responderPage, peerDeviceId) {
+  await initiatorPage
+    .getByRole("button", { name: "Encryption and devices" })
+    .click();
+  await responderPage
+    .getByRole("button", { name: "Encryption and devices" })
+    .click();
+  const initiatorDialog = initiatorPage.getByRole("dialog", {
+    name: "Encryption and devices",
   });
-}
-
-async function verifyPeerInBrowser(client, peerDeviceId) {
-  await page.getByRole("button", { name: "Encryption and devices" }).click();
-  const dialog = page.getByRole("dialog", { name: "Encryption and devices" });
-  const peerDevice = dialog
+  const responderDialog = responderPage.getByRole("dialog", {
+    name: "Encryption and devices",
+  });
+  const peerDevice = initiatorDialog
     .locator(".security-device")
     .filter({ hasText: peerDeviceId });
   await peerDevice.waitFor({ state: "visible", timeout: 20_000 });
-
-  const incomingRequest = waitForVerificationRequest(client);
   await peerDevice.getByRole("button", { name: "Verify" }).click();
-  let request;
-  try {
-    request = await incomingRequest;
-  } catch (cause) {
-    const dialogText = await dialog.innerText();
-    throw new Error(
-      `${cause instanceof Error ? cause.message : "Verification request failed"} Dialog state: ${dialogText}`,
-    );
-  }
-  await request.accept();
+  const acceptButton = responderDialog.getByRole("button", {
+    name: "Accept verification",
+  });
+  await acceptButton.waitFor({ state: "visible", timeout: 20_000 });
+  await acceptButton.click();
 
-  const startButton = dialog.getByRole("button", {
+  const startButton = initiatorDialog.getByRole("button", {
     name: "Start emoji verification",
   });
   await startButton.waitFor({ state: "visible", timeout: 20_000 });
   await startButton.click();
-  const verifier = await waitFor(
-    () => request.verifier,
-    "User B's SAS verifier",
-    20_000,
-  );
-  const sasReady = waitForSas(verifier);
-  const verification = verifier.verify();
-  const callbacks = await sasReady;
-  const peerEmojis = callbacks.sas.emoji?.map(([emoji]) => emoji) ?? [];
-  const localEmojis = await waitFor(
-    async () => {
-      const values = await dialog
-        .locator(".verification-emojis span")
-        .allTextContents();
-      return values.length > 0 ? values : null;
-    },
-    "the matching SAS emojis in the browser",
-  );
-  assert.ok(peerEmojis.length > 0);
-  assert.deepEqual(localEmojis, peerEmojis);
+  const initiatorEmojis = initiatorDialog.locator(".verification-emojis span");
+  const responderEmojis = responderDialog.locator(".verification-emojis span");
+  await initiatorEmojis.first().waitFor({ state: "visible", timeout: 20_000 });
+  await responderEmojis.first().waitFor({ state: "visible", timeout: 20_000 });
+  const [emojiA, emojiB] = await Promise.all([
+    initiatorEmojis.allTextContents(),
+    responderEmojis.allTextContents(),
+  ]);
+  assert.ok(emojiA.length > 0);
+  assert.deepEqual(emojiA, emojiB);
 
-  await dialog.getByRole("button", { name: "The emojis match" }).click();
-  await callbacks.confirm();
-  await verification;
-  await dialog.getByText("Verified", { exact: true }).waitFor({
-    state: "visible",
-    timeout: 20_000,
-  });
-  await dialog.getByRole("button", { name: "Close security settings" }).click();
+  await Promise.all([
+    initiatorDialog
+      .getByRole("button", { name: "The emojis match" })
+      .click(),
+    responderDialog
+      .getByRole("button", { name: "The emojis match" })
+      .click(),
+  ]);
+  await Promise.all([
+    initiatorDialog.getByText("Verified", { exact: true }).waitFor({
+      state: "visible",
+      timeout: 20_000,
+    }),
+    responderDialog.getByText("Verified", { exact: true }).waitFor({
+      state: "visible",
+      timeout: 20_000,
+    }),
+  ]);
+  await Promise.all([
+    initiatorDialog
+      .getByRole("button", { name: "Close security settings" })
+      .click(),
+    responderDialog
+      .getByRole("button", { name: "Close security settings" })
+      .click(),
+  ]);
   console.log(
-    `PASS browser completed interactive SAS verification for User B device ${peerDeviceId}`,
+    `PASS both browser clients completed interactive SAS verification for device ${peerDeviceId}`,
   );
 }
 
-async function prepareBrowserRecovery() {
-  await page.getByRole("button", { name: "Encryption and devices" }).click();
-  const dialog = page.getByRole("dialog", { name: "Encryption and devices" });
-  await dialog
-    .getByRole("button", { name: "Generate recovery key" })
-    .click();
+async function prepareBrowserRecovery(targetPage = page) {
+  const dialog = targetPage.getByRole("dialog", { name: "Save your recovery key" });
   const recoveryKey = await dialog.locator(".recovery-key-panel code").textContent();
   assert.ok(recoveryKey?.trim(), "The SDK should generate recovery material");
+  assert.ok(
+    !await targetPage.evaluate(
+      (key) => Object.values(localStorage).some((value) => value.includes(key)),
+      recoveryKey.trim(),
+    ),
+    "The recovery key must not be written to persistent browser storage",
+  );
   await dialog
     .getByRole("checkbox", {
       name: "I saved this recovery key in a secure place.",
     })
     .check();
   await dialog
-    .getByRole("button", { name: "Enable secure recovery" })
+    .getByRole("button", { name: "I saved my recovery key" })
     .click();
+  const activeDialog = targetPage.getByRole("dialog");
+  await activeDialog.locator(".security-pill.is-trusted").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await activeDialog
+    .getByText("Cross-signing is ready on this device.", { exact: true })
+    .waitFor({ state: "visible", timeout: 20_000 });
+  await activeDialog.getByText("Encrypted chat ready", { exact: true }).waitFor();
+  await activeDialog.getByRole("button", { name: "Close security settings" }).click();
+  console.log(
+    "PASS automatic browser recovery-key setup, confirmation, secret storage, trusted backup, and cross-signing",
+  );
+  return recoveryKey.trim();
+}
+
+async function restoreBrowserEncryption(targetPage, recoveryKey) {
+  const restoreDialog = targetPage.getByRole("dialog", {
+    name: "Restore encryption",
+  });
+  await restoreDialog.waitFor({ state: "visible", timeout: 45_000 });
+  await restoreDialog
+    .getByLabel("Restore encryption on this device")
+    .fill(recoveryKey);
+  await restoreDialog
+    .getByRole("button", { name: "Restore encryption" })
+    .click();
+  const dialog = targetPage.getByRole("dialog");
+  await dialog.getByText(/^Recovery finished:/).waitFor({
+    state: "visible",
+    timeout: 60_000,
+  });
   await dialog.locator(".security-pill.is-trusted").waitFor({
     state: "visible",
     timeout: 30_000,
   });
   await dialog
     .getByText("Cross-signing is ready on this device.", { exact: true })
-    .waitFor({ state: "visible", timeout: 20_000 });
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await dialog.getByText("Encrypted chat ready", { exact: true }).waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
   await dialog.getByRole("button", { name: "Close security settings" }).click();
   console.log(
-    "PASS browser recovery-key acknowledgement, secret storage, trusted backup, and cross-signing setup",
+    "PASS returning browser device restored encryption, cross-signing, and trusted backup with the saved recovery key",
   );
 }
 
-async function waitForDecrypted(client, roomId, eventId, body) {
-  return waitFor(() => {
-    const event = client
-      .getRoom(roomId)
-      ?.getLiveTimeline()
-      .getEvents()
-      .find((candidate) => candidate.getId() === eventId);
-    return event?.getClearContent()?.body === body ? event : null;
-  }, "the Node Matrix client to decrypt the browser-sent event");
-}
-
-async function signOutThroughUi() {
-  if (!page) return;
-  await page.getByRole("button", { name: "Sign out" }).click({ timeout: 3_000 });
-  await page.getByLabel("Email or username").waitFor({
-    state: "visible",
-    timeout: 8_000,
+function monitorPage(targetPage) {
+  targetPage.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.includes("/auth/")) {
+      browserAuthRequests.push(`${request.method()} ${path}`);
+    }
   });
-}
-
-try {
-  const accountA = await registerUser("a");
-  const accountB = await registerUser("b");
-  const sessionB = await loginUser(accountB);
-
-  browser = await chromium.launch({
-    headless: true,
-    executablePath: chromiumPath,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  targetPage.on("requestfailed", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.includes("/auth/")) {
+      browserAuthRequests.push(
+        `${request.method()} ${path} failed: ${request.failure()?.errorText ?? "unknown"}`,
+      );
+    }
   });
-  const browserContext = await browser.newContext({
-    viewport: { width: 1365, height: 900 },
-  });
-  page = await browserContext.newPage();
-  page.on("pageerror", (error) => {
+  targetPage.on("pageerror", (error) => {
     if (
+      targetPage === page &&
       browserOffline &&
       /ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|failed to fetch|networkerror/i.test(
         error.message,
@@ -372,7 +443,7 @@ try {
     }
     browserErrors.push(error.message);
   });
-  page.on("response", (response) => {
+  targetPage.on("response", (response) => {
     if (
       response.status() === 404 &&
       response.url().includes(
@@ -393,9 +464,10 @@ try {
       browserHttpErrors.push(`${response.status()} ${response.url()}`);
     }
   });
-  page.on("console", (message) => {
+  targetPage.on("console", (message) => {
     if (message.type() !== "error") return;
     if (
+      targetPage === page &&
       browserOffline &&
       /ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_FAILED|failed to fetch|networkerror/i.test(
         message.text(),
@@ -403,158 +475,287 @@ try {
     ) {
       return;
     }
-    if (message.text() === "Failed to load resource: the server responded with a status of 404 (Not Found)") {
+    if (
+      message.text() ===
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ) {
       genericNotFoundConsoleErrors += 1;
     } else {
       consoleErrors.push(message.text());
     }
   });
+}
 
-  const sessionA = await signInThroughUi(accountA);
+async function signOutThroughUi(targetPage = page) {
+  if (!targetPage) return;
+  await targetPage.getByRole("button", { name: "Sign out" }).click({ timeout: 3_000 });
+  await targetPage.getByLabel("Email or username").waitFor({
+    state: "visible",
+    timeout: 8_000,
+  });
+}
+
+async function waitForServerBackup(session) {
+  return waitFor(async () => {
+    const response = await fetch(
+      `${matrixUrl}/_matrix/client/v3/room_keys/version`,
+      {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      },
+    );
+    if (response.status === 404) return null;
+    assert.equal(response.status, 200);
+    const backup = await response.json();
+    return backup.count > 0 ? backup : null;
+  }, "an uploaded encrypted room-key backup", 60_000);
+}
+
+try {
+  browser = await chromium.launch({
+    headless: true,
+    executablePath: chromiumPath,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
+  browserContext = await browser.newContext({
+    viewport: { width: 1365, height: 900 },
+  });
+  browserContextB = await browser.newContext({
+    viewport: { width: 1365, height: 900 },
+  });
+  page = await browserContext.newPage();
+  pageB = await browserContextB.newPage();
+  monitorPage(page);
+  monitorPage(pageB);
+
+  const registeredA = await registerThroughUi("a");
+  const accountA = registeredA.account;
+  const sessionA = registeredA.matrix;
+  const recoveryKeyA = await prepareBrowserRecovery(page);
+  console.log("PASS Alice registered through the UI and was signed in automatically");
+
+  const registeredB = await registerThroughUi("b", pageB);
+  const accountB = registeredB.account;
+  const sessionB = registeredB;
+  const recoveryKeyB = await prepareBrowserRecovery(pageB);
   assert.notEqual(sessionA.user_id, sessionB.matrix.user_id);
+  console.log("PASS Bob registered through the UI and was signed in automatically");
 
-  clientB = sdk.createClient({
-    baseUrl: matrixUrl,
-    accessToken: sessionB.matrix.access_token,
-    userId: sessionB.matrix.user_id,
-    deviceId: sessionB.matrix.device_id,
-    store: new sdk.MemoryStore(),
-    cryptoStore: new sdk.MemoryCryptoStore(),
-    logger,
-    verificationMethods: ["m.sas.v1"],
+  await page.getByRole("button", { name: "Start a new chat" }).click();
+  const directoryDialog = page.getByRole("dialog", {
+    name: "Start a conversation",
   });
-  await clientB.initRustCrypto({ useIndexedDB: false });
-  assert.ok(clientB.getCrypto());
-  await startSync(clientB);
-  assert.equal((await clientB.whoami()).user_id, sessionB.matrix.user_id);
-  await clientB.getCrypto().bootstrapCrossSigning({
-    authUploadDeviceSigningKeys: async (makeRequest) => makeRequest(null),
-  });
-  assert.equal(await clientB.getCrypto().isCrossSigningReady(), true);
+  await directoryDialog
+    .getByPlaceholder("Search username")
+    .fill(accountB.username);
+  const requestResponsePromise = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/connections/requests") &&
+      response.request().method() === "POST",
+  );
+  await directoryDialog
+    .getByRole("button", { name: "Add Contact" })
+    .click();
+  const requestResponse = await requestResponsePromise;
+  assert.ok(requestResponse.ok(), "Alice's contact request should be accepted");
+  const connectionRequest = await requestResponse.json();
+  assert.equal(connectionRequest.status, "pending");
+  await directoryDialog.getByRole("button", { name: "Close" }).click();
 
-  const roomId = await createEncryptedDirectRoom(
-    clientB,
-    sessionA.user_id,
-    `Step 07 browser E2EE ${runId}`,
+  const acceptance = await fetch(
+    `${apiBaseUrl}/connections/${encodeURIComponent(connectionRequest.id)}/accept`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${sessionB.appAccessToken}`,
+      },
+    },
   );
-  await waitFor(
-    () => clientB.getRoom(roomId)?.hasEncryptionStateEvent(),
-    "User B to synchronize the encrypted room state",
-  );
-  await joinInvitedRoom(sessionA, roomId);
+  assert.ok(acceptance.ok, "Bob should accept Alice's contact request");
+  const acceptedConnection = await acceptance.json();
+  assert.equal(acceptedConnection.status, "accepted");
+
+  await Promise.all([
+    page.evaluate(() => window.dispatchEvent(new Event("focus"))),
+    pageB.evaluate(() => window.dispatchEvent(new Event("focus"))),
+  ]);
   const roomRow = page
     .locator(".conversation-row")
-    .filter({ hasText: `Step 07 browser E2EE ${runId}` });
+    .filter({ hasText: accountB.displayName });
   await roomRow.waitFor({ state: "visible", timeout: 30_000 });
   await roomRow.click();
   await page.getByLabel("Write a message").waitFor({
     state: "visible",
     timeout: 30_000,
   });
+  const roomPath = new URL(page.url()).pathname.split("/").at(-1);
+  assert.ok(roomPath);
+  const roomId = decodeURIComponent(roomPath);
   assert.ok(roomId.startsWith("!"));
-  await prepareBrowserRecovery();
-  await verifyPeerInBrowser(clientB, sessionB.matrix.device_id);
-
-  await waitFor(
-    () => clientB.getRoom(roomId)?.hasEncryptionStateEvent(),
-    "User B to synchronize the room encryption state",
-  );
-  assert.equal(clientB.getRoom(roomId)?.getMyMembership(), "join");
-  assert.equal(
-    await clientB.getCrypto().isEncryptionEnabledInRoom(roomId),
-    true,
-  );
-
-  const inboundBody = `e2ee-browser-inbound-${runId}`;
-  const inbound = await clientB.sendTextMessage(roomId, inboundBody);
-  const inboundWireEvent = await serverEvent(
-    sessionB.matrix,
-    roomId,
-    inbound.event_id,
-    inboundBody,
-  );
-  const inboundRow = page.locator(
-    `.message-row[data-event-id="${inbound.event_id}"]`,
-  );
-  await inboundRow.waitFor({ state: "visible", timeout: 30_000 });
-  await inboundRow.getByText(inboundBody, { exact: true }).waitFor({
+  await joinInvitedRoom(sessionB.matrix, roomId);
+  const bobRoomRow = pageB
+    .locator(".conversation-row")
+    .filter({ hasText: accountA.displayName });
+  await bobRoomRow.waitFor({ state: "visible", timeout: 45_000 });
+  await bobRoomRow.click();
+  await pageB.getByLabel("Write a message").waitFor({
     state: "visible",
+    timeout: 30_000,
   });
-  assert.equal(await inboundRow.count(), 1);
-  assert.equal(await inboundRow.getAttribute("data-room-id"), roomId);
-  assert.equal(await inboundRow.getAttribute("data-event-type"), "m.room.encrypted");
-  assert.equal(
-    await inboundRow.getAttribute("data-sender-id"),
-    sessionB.matrix.user_id,
-  );
-  console.log(
-    `PASS React Matrix client decrypted a live server event ${inboundWireEvent.event_id}; wire type=m.room.encrypted; plaintext absent`,
-  );
+  await verifyPeerInBrowser(page, pageB, sessionB.matrix.device_id);
 
-  const outboundBody = `e2ee-browser-outbound-${runId}`;
-  await page.getByLabel("Write a message").fill(outboundBody);
+  const aliceBody = `e2ee-browser-alice-to-bob-${runId}`;
+  await pageB.evaluate(() => {
+    window.history.pushState({}, "", "/chat");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await pageB.getByRole("button", { name: "Start a new chat" }).waitFor({
+    state: "visible",
+    timeout: 20_000,
+  });
+  await page.getByLabel("Write a message").fill(aliceBody);
   await page.getByRole("button", { name: "Send message" }).click();
-  const outboundRow = page
+  const aliceRow = page
     .locator(".message-row")
-    .filter({ hasText: outboundBody });
-  await outboundRow.waitFor({ state: "visible", timeout: 30_000 });
+    .filter({ hasText: aliceBody });
+  await aliceRow.waitFor({ state: "visible", timeout: 30_000 });
   await waitFor(
     async () =>
-      (await outboundRow.getAttribute("data-event-type")) === "m.room.encrypted",
-    "the React event to reflect its encrypted wire type",
+      (await aliceRow.getAttribute("data-event-type")) === "m.room.encrypted",
+    "Alice's React event to reflect its encrypted wire type",
   );
-  const outboundEventId = await outboundRow.getAttribute("data-event-id");
-  assert.ok(outboundEventId);
+  const aliceEventId = await waitForServerEventId(
+    aliceRow,
+    "Alice's message to be acknowledged by Synapse",
+  );
   assert.equal(
-    await outboundRow.getAttribute("data-event-type"),
+    await aliceRow.getAttribute("data-event-type"),
     "m.room.encrypted",
   );
-  const outboundWireEvent = await serverEvent(
+  const aliceWireEvent = await serverEvent(
+    sessionA,
+    roomId,
+    aliceEventId,
+    aliceBody,
+  );
+  const readReceiptPromise = pageB.waitForResponse(
+    (response) =>
+      response.url().includes("/receipt/") &&
+      response.url().includes("m.read"),
+    { timeout: 25_000 },
+  );
+  await bobRoomRow.click();
+  await pageB.getByLabel("Write a message").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  const readReceipt = await readReceiptPromise;
+  assert.ok(readReceipt.ok(), "Bob's read receipt should reach Synapse");
+  const aliceRowOnBob = pageB.locator(
+    `.message-row[data-event-id="${aliceEventId}"]`,
+  );
+  await aliceRowOnBob.getByText(aliceBody, { exact: true }).waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  assert.equal(await aliceRowOnBob.getAttribute("data-event-type"), "m.room.encrypted");
+  assert.equal(await aliceRowOnBob.getAttribute("data-sender-id"), sessionA.user_id);
+  console.log(
+    `PASS Alice's React composer sent encrypted event ${aliceWireEvent.event_id}; Bob decrypted it and sent a read receipt`,
+  );
+
+  await sendTyping(sessionB.matrix, roomId, true);
+  await page
+    .locator(".typing-row")
+    .filter({ hasText: accountB.displayName })
+    .waitFor({ state: "visible", timeout: 20_000 });
+  await sendTyping(sessionB.matrix, roomId, false);
+  await page
+    .locator(".typing-row")
+    .filter({ hasText: accountB.displayName })
+    .waitFor({ state: "hidden", timeout: 20_000 });
+  console.log("PASS Alice's active chat displayed and cleared Bob's Matrix typing indicator");
+
+  const bobBody = `e2ee-browser-bob-to-alice-${runId}`;
+  await pageB.getByLabel("Write a message").fill(bobBody);
+  await pageB.getByRole("button", { name: "Send message" }).click();
+  const bobRow = pageB.locator(".message-row").filter({ hasText: bobBody });
+  await bobRow.waitFor({ state: "visible", timeout: 30_000 });
+  const bobEventId = await waitForServerEventId(
+    bobRow,
+    "Bob's message to be acknowledged by Synapse",
+  );
+  await waitFor(
+    async () =>
+      (await bobRow.getAttribute("data-event-type")) === "m.room.encrypted",
+    "Bob's React event to reflect its encrypted wire type",
+  );
+  const bobWireEvent = await serverEvent(
     sessionB.matrix,
     roomId,
-    outboundEventId,
-    outboundBody,
+    bobEventId,
+    bobBody,
   );
-  const decryptedByB = await waitForDecrypted(
-    clientB,
-    roomId,
-    outboundEventId,
-    outboundBody,
+  const bobRowOnAlice = page.locator(
+    `.message-row[data-event-id="${bobEventId}"]`,
   );
-  assert.equal(decryptedByB.getSender(), sessionA.user_id);
+  await bobRowOnAlice.getByText(bobBody, { exact: true }).waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  assert.equal(await bobRowOnAlice.getAttribute("data-event-type"), "m.room.encrypted");
+  assert.equal(await bobRowOnAlice.getAttribute("data-sender-id"), sessionB.matrix.user_id);
+  for (const row of [aliceRow, aliceRowOnBob, bobRow, bobRowOnAlice]) {
+    const timestamp = await row.locator("time").getAttribute("datetime");
+    assert.ok(timestamp && Number.isFinite(Date.parse(timestamp)));
+  }
   console.log(
-    `PASS React composer sent event ${outboundWireEvent.event_id}; User B decrypted the exact message; wire type=m.room.encrypted`,
+    `PASS Bob's React composer sent encrypted event ${bobWireEvent.event_id}; Alice decrypted it; message timestamps are present`,
   );
 
   browserOffline = true;
   await browserContext.setOffline(true);
   const offlineTriggerBody = `e2ee-browser-offline-trigger-${runId}`;
-  const offlineTrigger = await clientB.sendTextMessage(
-    roomId,
-    offlineTriggerBody,
+  await pageB.getByLabel("Write a message").fill(offlineTriggerBody);
+  await pageB.getByRole("button", { name: "Send message" }).click();
+  const offlineTriggerRow = pageB
+    .locator(".message-row")
+    .filter({ hasText: offlineTriggerBody });
+  await offlineTriggerRow.waitFor({ state: "visible", timeout: 30_000 });
+  const offlineTriggerId = await waitForServerEventId(
+    offlineTriggerRow,
+    "Bob's offline trigger message to be acknowledged by Synapse",
   );
   await serverEvent(
     sessionB.matrix,
     roomId,
-    offlineTrigger.event_id,
+    offlineTriggerId,
     offlineTriggerBody,
   );
   await page.getByRole("status").filter({ hasText: "Reconnecting to Matrix" }).first().waitFor({
     state: "visible",
-    timeout: 25_000,
+    timeout: 45_000,
   });
   const missedBody = `e2ee-browser-reconnect-${runId}`;
-  const missed = await clientB.sendTextMessage(roomId, missedBody);
+  await pageB.getByLabel("Write a message").fill(missedBody);
+  await pageB.getByRole("button", { name: "Send message" }).click();
+  const missedRowOnBob = pageB
+    .locator(".message-row")
+    .filter({ hasText: missedBody });
+  await missedRowOnBob.waitFor({ state: "visible", timeout: 30_000 });
+  const missedEventId = await waitForServerEventId(
+    missedRowOnBob,
+    "Bob's reconnect message to be acknowledged by Synapse",
+  );
   const missedWireEvent = await serverEvent(
     sessionB.matrix,
     roomId,
-    missed.event_id,
+    missedEventId,
     missedBody,
   );
   await browserContext.setOffline(false);
   browserOffline = false;
   const recoveredRow = page.locator(
-    `.message-row[data-event-id="${missed.event_id}"]`,
+    `.message-row[data-event-id="${missedEventId}"]`,
   );
   await recoveredRow.waitFor({ state: "visible", timeout: 60_000 });
   await recoveredRow.getByText(missedBody, { exact: true }).waitFor({
@@ -562,12 +763,61 @@ try {
     timeout: 30_000,
   });
   assert.equal(await recoveredRow.count(), 1);
-  await page.getByRole("status").filter({ hasText: "Connected to Matrix" }).first().waitFor({
+  await page.getByRole("status").filter({ hasText: "Encrypted chat ready" }).first().waitFor({
     state: "visible",
     timeout: 30_000,
   });
   console.log(
     `PASS browser recovered and decrypted offline event ${missedWireEvent.event_id} without a refresh`,
+  );
+
+  const originalBobDeviceId = sessionB.matrix.device_id;
+  await waitForServerBackup(sessionB.matrix);
+  browserContextC = await browser.newContext({
+    viewport: { width: 1365, height: 900 },
+  });
+  pageC = await browserContextC.newPage();
+  monitorPage(pageC);
+  const sessionC = await loginThroughUi(accountB, pageC);
+  assert.notEqual(
+    sessionC.matrix.device_id,
+    originalBobDeviceId,
+    "A new login should receive a distinct Matrix device for history recovery",
+  );
+  const devicesResponse = await fetch(
+    `${matrixUrl}/_matrix/client/v3/devices`,
+    { headers: { Authorization: `Bearer ${sessionC.matrix.access_token}` } },
+  );
+  assert.equal(devicesResponse.status, 200);
+  const deviceList = await devicesResponse.json();
+  assert.ok(
+    deviceList.devices.some(
+      (device) => device.device_id === originalBobDeviceId,
+    ) &&
+      deviceList.devices.some(
+        (device) => device.device_id === sessionC.matrix.device_id,
+      ),
+    "The original Matrix device identity should remain registered",
+  );
+  await restoreBrowserEncryption(pageC, recoveryKeyB);
+  const restoredBobRoom = pageC
+    .locator(".conversation-row")
+    .filter({ hasText: accountA.displayName });
+  await restoredBobRoom.waitFor({ state: "visible", timeout: 45_000 });
+  await restoredBobRoom.click();
+  await pageC.getByLabel("Write a message").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  for (const body of [aliceBody, bobBody, missedBody]) {
+    await pageC
+      .locator(".message-row")
+      .filter({ hasText: body })
+      .getByText(body, { exact: true })
+      .waitFor({ state: "visible", timeout: 45_000 });
+  }
+  console.log(
+    `PASS fresh authorized device ${sessionC.matrix.device_id} restored Bob's encrypted message history; original device ${originalBobDeviceId} remains registered`,
   );
 
   assert.deepEqual(browserErrors, []);
@@ -588,16 +838,18 @@ try {
     `PASS browser E2EE room=${roomId} sender=${sessionA.user_id} receiver=${sessionB.matrix.user_id}`,
   );
 } finally {
-  if (page) await signOutThroughUi().catch(() => undefined);
+  if (pageC) await signOutThroughUi(pageC).catch(() => undefined);
+  if (pageB) await signOutThroughUi(pageB).catch(() => undefined);
+  if (page) await signOutThroughUi(page).catch(() => undefined);
   if (page) await page.close().catch(() => undefined);
+  if (pageB) await pageB.close().catch(() => undefined);
+  if (pageC) await pageC.close().catch(() => undefined);
+  if (browserContextC) await browserContextC.close().catch(() => undefined);
+  if (browserContextB) await browserContextB.close().catch(() => undefined);
+  if (browserContext) await browserContext.close().catch(() => undefined);
   if (browser) await browser.close().catch(() => undefined);
-  if (clientB) {
-    clientB.stopClient();
-    await clientB.logout().catch(() => undefined);
-  }
 }
 
-// Rust crypto may keep optional SDK RTC timers alive after its Matrix client is
-// stopped. This one-shot browser harness exits after awaited cleanup finishes.
+// This one-shot browser harness exits after awaited client cleanup finishes.
 await new Promise((resolve) => setTimeout(resolve, 100));
 process.exit(0);

@@ -12,6 +12,7 @@ const { createEncryptedRoomMock, matrixSnapshot } = vi.hoisted(() => ({
     status: "connected",
     initialSyncComplete: true,
     cryptoStatus: "ready",
+    cryptoOnboardingStatus: "ready",
     error: null,
     authenticationError: false,
     recentEvents: [],
@@ -46,5 +47,16 @@ describe("useMatrixRooms", () => {
     expect(first).toBe("!direct:localhost");
     expect(second).toBe("!direct:localhost");
     expect(createEncryptedRoomMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create a conversation before encryption onboarding is ready", async () => {
+    matrixSnapshot.cryptoOnboardingStatus = "restore_encryption";
+    const { result } = renderHook(() => useMatrixRooms());
+
+    await expect(
+      result.current.createDirect("peer-id", "Peer", "@peer:localhost"),
+    ).rejects.toThrow(/finish secure messaging setup/i);
+    expect(createEncryptedRoomMock).not.toHaveBeenCalled();
+    matrixSnapshot.cryptoOnboardingStatus = "ready";
   });
 });

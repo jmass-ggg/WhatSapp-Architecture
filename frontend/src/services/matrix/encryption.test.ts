@@ -79,6 +79,15 @@ describe("Matrix encrypted room and message operations", () => {
     expect(createRoom).not.toHaveBeenCalled();
   });
 
+  it("does not create a room until cross-signing is ready", async () => {
+    const { client, createRoom } = mockClient({ crossSigningReady: false });
+
+    await expect(
+      createEncryptedRoom(client, { invitees: ["@peer:localhost"] }),
+    ).rejects.toThrow(/secure recovery must be ready/i);
+    expect(createRoom).not.toHaveBeenCalled();
+  });
+
   it("rejects sending to plaintext or unconfirmed rooms without calling a plaintext API", async () => {
     const { client, sendTextMessage } = mockClient({
       hasEncryptionState: false,
