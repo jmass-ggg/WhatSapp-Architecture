@@ -16,6 +16,9 @@ it("shows SDK-derived outgoing status and no receipt for incoming messages", () 
   expect(screen.getByLabelText("Sending")).toBeTruthy();
   view.rerender(<MessageBubble message={{ ...message, delivery: "sent" }} conversation={conversation} matrixSession={null} />);
   expect(screen.getByLabelText("Sent")).toBeTruthy();
+  view.rerender(<MessageBubble message={{ ...message, delivery: "read", readAt: new Date(1_750_000_000_000) }} conversation={conversation} matrixSession={null} />);
+  expect(screen.getByLabelText("Read")).toBeTruthy();
+  expect(screen.getByLabelText(/^Seen at /)).toBeTruthy();
   view.rerender(<MessageBubble message={{ ...message, delivery: "failed" }} conversation={conversation} matrixSession={null} />);
   expect(screen.getByText("Not sent")).toBeTruthy();
   view.rerender(<MessageBubble message={{ ...message, sender: "them" }} conversation={conversation} matrixSession={null} />);

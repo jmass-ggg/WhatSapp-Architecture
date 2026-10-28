@@ -1,9 +1,49 @@
-import { EventStatus, MatrixEvent, type Room } from "matrix-js-sdk";
-import { describe, expect, it } from "vitest";
+import { EventStatus, MatrixEvent, ReceiptType, type Room } from "matrix-js-sdk";
+import { describe, expect, it, vi } from "vitest";
 
 import { conversationFromMatrixRoom, conversationsFromMatrixClient } from "./rooms";
 
 describe("Matrix room mapping", () => {
+  it("uses only a real recipient public receipt at a known timeline position", () => {
+    const makeEvent = (id: string, sender: string) => new MatrixEvent({
+      event_id: id, room_id: "!room:localhost", sender,
+      type: "m.room.message", origin_server_ts: 1_750_000_000_000,
+      content: { msgtype: "m.text", body: id },
+    });
+    const earlier = makeEvent("$earlier", "@self:localhost");
+    const later = makeEvent("$later", "@self:localhost");
+    const incoming = makeEvent("$incoming", "@peer:localhost");
+    const pending = makeEvent("~pending", "@self:localhost");
+    pending.setStatus(EventStatus.SENDING);
+    const failed = makeEvent("~failed", "@self:localhost");
+    failed.setStatus(EventStatus.NOT_SENT);
+    const events = [earlier, later, incoming, pending, failed];
+    let receipt: { eventId: string; data: { ts: number } } | null = null;
+    const getReadReceiptForUserId = vi.fn((userId: string, ignoreSynthesized: boolean, type: ReceiptType) =>
+      userId === "@peer:localhost" && ignoreSynthesized && type === ReceiptType.Read ? receipt : null);
+    const room = {
+      roomId: "!room:localhost", name: "Chat", getMembers: () => [{
+        userId: "@peer:localhost", membership: "join", name: "Peer",
+        events: { member: { getContent: () => ({}) } },
+      }],
+      getLiveTimeline: () => ({ getEvents: () => events }),
+      getReadReceiptForUserId,
+      hasEncryptionStateEvent: () => true, getUnreadNotificationCount: () => 0,
+      getLastActiveTimestamp: () => 0,
+    } as unknown as Room;
+    const messages = () => conversationFromMatrixRoom(room, "@self:localhost").messages;
+    expect(messages().map((message) => message.delivery)).toEqual(["sent", "sent", "sent", "sending", "failed"]);
+    receipt = { eventId: "$earlier", data: { ts: 1_750_000_000_000 } };
+    expect(messages().map((message) => message.delivery)).toEqual(["read", "sent", "sent", "sending", "failed"]);
+    receipt = { eventId: "$incoming", data: { ts: 1_750_000_000_000 } };
+    expect(messages().map((message) => message.delivery)).toEqual(["read", "read", "sent", "sending", "failed"]);
+    expect(messages()[0].readAt?.getTime()).toBe(1_750_000_000_000);
+    receipt = { eventId: "$incoming", data: { ts: Number.NaN } };
+    expect(messages()[0].readAt).toBeUndefined();
+    receipt = { eventId: "$unloaded", data: { ts: 1_750_000_000_000 } };
+    expect(messages()[0].delivery).toBe("sent");
+    expect(getReadReceiptForUserId).toHaveBeenCalledWith("@peer:localhost", true, ReceiptType.Read);
+  });
   it("keeps rapid local echoes and reconciles temporary IDs without duplicate rows", () => {
     const makeEvent = (id: string, body: string) => new MatrixEvent({
       event_id: id, room_id: "!room:localhost", sender: "@self:localhost",

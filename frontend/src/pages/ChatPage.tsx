@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { EventType } from "matrix-js-sdk";
+import { EventType, ReceiptType } from "matrix-js-sdk";
 
 import { AppLayout } from "../layouts/AppLayout";
 import { ContactInfoPanel } from "../components/chat/ContactInfoPanel";
@@ -474,7 +474,8 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (mode !== "live" || !selectedConversation || isInvited ||
+    if (mode !== "live" || !user || matrix.status !== "connected" ||
+      !selectedConversation || isInvited ||
       (!selectedConversation.isGroup &&
         selectedConversation.connectionAllowed !== true) ||
       !pageVisible ||
@@ -482,12 +483,20 @@ export function ChatPage() {
     const client = matrixContext.client;
     const room = client?.getRoom(selectedConversation.id);
     if (!client || !room || room.getMyMembership() !== "join") return;
-    const lastIncoming = [...room.getLiveTimeline().getEvents()].reverse().find(
+    const events = room.getLiveTimeline().getEvents();
+    const lastIncoming = [...events].reverse().find(
       (event) => event.getSender() !== client.getUserId() &&
         event.getId() && event.getType() === "m.room.message" &&
-        !event.isDecryptionFailure(),
+        !event.isDecryptionFailure() &&
+        (!event.isEncrypted() || Boolean(event.getClearContent()?.body)),
     );
-    if (lastIncoming && selectedConversation.unreadCount > 0) {
+    if (lastIncoming) {
+      const ownReceipt = room.getReadReceiptForUserId(client.getUserId()!, true, ReceiptType.Read);
+      const incomingIndex = events.indexOf(lastIncoming);
+      const ownReceiptIndex = ownReceipt
+        ? events.findIndex((event) => event.getId() === ownReceipt.eventId)
+        : -1;
+      if (ownReceiptIndex >= incomingIndex) return;
       const receiptKey = `${client.getUserId()}:${selectedConversation.id}:${lastIncoming.getId()}`;
       if (lastReadReceipt.current === receiptKey) return;
       lastReadReceipt.current = receiptKey;
@@ -499,9 +508,11 @@ export function ChatPage() {
     conversationId,
     isInvited,
     matrixContext.client,
+    matrix.status,
     mode,
     pageVisible,
     selectedConversation,
+    user,
   ]);
 
   const acceptInvitation = useCallback(async () => {

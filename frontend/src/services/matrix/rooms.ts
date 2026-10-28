@@ -1,4 +1,4 @@
-import type { MatrixEvent, Room } from "matrix-js-sdk";
+import { ReceiptType, type MatrixEvent, type Room } from "matrix-js-sdk";
 
 import type { Conversation, Message } from "../../types";
 import { messageFromMatrixEvent } from "./events";
@@ -9,11 +9,28 @@ function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string
   return typeof avatar === "string" ? avatar : null;
 }
 
-function timelineMessages(room: Room, ownUserId: string): Message[] {
+function timelineMessages(room: Room, ownUserId: string, recipientId?: string): Message[] {
   const byEventId = new Map<string, Message>();
-  for (const event of room.getLiveTimeline().getEvents()) {
+  const events = room.getLiveTimeline().getEvents();
+  const receipt = recipientId
+    ? room.getReadReceiptForUserId?.(recipientId, true, ReceiptType.Read)
+    : null;
+  const receiptIndex = receipt
+    ? events.findIndex((event) => event.getId() === receipt.eventId)
+    : -1;
+  const readAt = receipt && Number.isFinite(receipt.data.ts) &&
+    Math.abs(receipt.data.ts) <= 8.64e15
+    ? new Date(receipt.data.ts)
+    : undefined;
+  for (const [index, event] of events.entries()) {
     const message = messageFromMatrixEvent(event, room.roomId, ownUserId);
     if (!message) continue;
+    if (message.sender === "me" && message.delivery === "sent" &&
+      receiptIndex >= index &&
+      !event.getId()?.startsWith("~")) {
+      message.delivery = "read";
+      if (readAt) message.readAt = readAt;
+    }
     byEventId.set(message.id, message);
   }
   return [...byEventId.values()]
@@ -45,7 +62,9 @@ export function conversationFromMatrixRoom(
     members[0]?.name ||
     room.guessDMUserId() ||
     "New conversation";
-  const messages = timelineMessages(room, ownUserId);
+  const messages = timelineMessages(room, ownUserId,
+    members.length === 1 && members[0].membership === "join"
+      ? members[0].userId : undefined);
   const latest = messages.at(-1);
   const isEncrypted = room.hasEncryptionStateEvent();
   const typing = members.some((member) => member.typing);

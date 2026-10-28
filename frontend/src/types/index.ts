@@ -87,6 +87,7 @@ export interface Message {
   text: string;
   sentAt: Date;
   delivery: "sending" | "sent" | "delivered" | "read" | "failed" | "cancelled";
+  readAt?: Date;
   attachment?: Attachment;
   replyTo?: {
     sender: string;

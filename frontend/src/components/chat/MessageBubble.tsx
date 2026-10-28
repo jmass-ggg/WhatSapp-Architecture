@@ -66,6 +66,11 @@ export function MessageBubble({
               {formatMessageTime(message.sentAt)}
             </time>
             {outgoing && <Receipt delivery={message.delivery} />}
+            {outgoing && message.delivery === "read" && message.readAt && (
+              <time dateTime={message.readAt.toISOString()} aria-label={`Seen at ${formatMessageTime(message.readAt)}`}>
+                Seen at {formatMessageTime(message.readAt)}
+              </time>
+            )}
           </span>
         </div>
         {message.reaction && (
