@@ -685,6 +685,7 @@ describe("Matrix client session lifecycle", () => {
     await waitForStart(client);
     await flushMicrotasks();
     expect(factory).toHaveBeenCalledTimes(1);
+    expect(client.listenerCount(RoomEvent.LocalEchoUpdated)).toBe(1);
     expect(client.stopClient).not.toHaveBeenCalled();
 
     let renderCount = 0;
@@ -711,6 +712,7 @@ describe("Matrix client session lifecycle", () => {
     await flushMicrotasks();
     expect(client.stopClient).toHaveBeenCalledTimes(1);
     expect(client.listenerCount(ClientEvent.Sync)).toBe(0);
+    expect(client.listenerCount(RoomEvent.LocalEchoUpdated)).toBe(0);
   });
 
   it("isolates rooms when switching accounts", async () => {

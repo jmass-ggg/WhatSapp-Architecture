@@ -1,4 +1,4 @@
-import type { MatrixEvent } from "matrix-js-sdk";
+import { EventStatus, type MatrixEvent } from "matrix-js-sdk";
 
 import type { Message } from "../../types";
 
@@ -14,6 +14,23 @@ function initialsFor(name: string): string {
   return parts.length > 1
     ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ""}`.toUpperCase()
     : (parts[0]?.slice(0, 2) ?? "??").toUpperCase();
+}
+
+function outgoingDelivery(event: MatrixEvent): Message["delivery"] {
+  switch (event.status) {
+    case EventStatus.NOT_SENT:
+      return "failed";
+    case EventStatus.CANCELLED:
+      return "cancelled";
+    case EventStatus.ENCRYPTING:
+    case EventStatus.QUEUED:
+    case EventStatus.SENDING:
+      return "sending";
+    case EventStatus.SENT:
+      return "sent";
+    default:
+      return event.getId()?.startsWith("~") ? "sending" : "sent";
+  }
 }
 
 export function messageFromMatrixEvent(
@@ -42,7 +59,7 @@ export function messageFromMatrixEvent(
         ? "Unable to decrypt this encrypted message."
         : "Encrypted message · waiting for a room key.",
       sentAt,
-      delivery: "sent",
+      delivery: senderId === ownUserId ? outgoingDelivery(event) : "sent",
       matrix: {
         eventId: eventId ?? "",
         roomId,
@@ -81,7 +98,7 @@ export function messageFromMatrixEvent(
     senderName: senderId,
     text: isFile ? "" : body,
     sentAt,
-    delivery: senderId === ownUserId ? "sent" : "delivered",
+    delivery: senderId === ownUserId ? outgoingDelivery(event) : "sent",
     ...(isFile
       ? {
           attachment: {

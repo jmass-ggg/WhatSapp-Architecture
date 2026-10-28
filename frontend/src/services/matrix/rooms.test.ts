@@ -1,9 +1,35 @@
-import { MatrixEvent, type Room } from "matrix-js-sdk";
+import { EventStatus, MatrixEvent, type Room } from "matrix-js-sdk";
 import { describe, expect, it } from "vitest";
 
 import { conversationFromMatrixRoom, conversationsFromMatrixClient } from "./rooms";
 
 describe("Matrix room mapping", () => {
+  it("keeps rapid local echoes and reconciles temporary IDs without duplicate rows", () => {
+    const makeEvent = (id: string, body: string) => new MatrixEvent({
+      event_id: id, room_id: "!room:localhost", sender: "@self:localhost",
+      type: "m.room.message", origin_server_ts: 1_750_000_000_000,
+      content: { msgtype: "m.text", body },
+    });
+    const first = makeEvent("~first", "first");
+    const second = makeEvent("~second", "second");
+    first.setStatus(EventStatus.SENDING);
+    second.setStatus(EventStatus.SENDING);
+    const timeline = [first, second];
+    const room = {
+      roomId: "!room:localhost", name: "Chat", getMembers: () => [],
+      getLiveTimeline: () => ({ getEvents: () => timeline }),
+      hasEncryptionStateEvent: () => true, getUnreadNotificationCount: () => 0,
+      getLastActiveTimestamp: () => 0,
+    } as unknown as Room;
+    expect(conversationFromMatrixRoom(room, "@self:localhost").messages.map((message) => message.delivery)).toEqual(["sending", "sending"]);
+    first.replaceLocalEventId("$first:localhost");
+    first.setStatus(EventStatus.SENT);
+    const remoteEcho = makeEvent("$first:localhost", "first");
+    timeline.push(remoteEcho);
+    expect(conversationFromMatrixRoom(room, "@self:localhost").messages.map((message) => message.id)).toEqual(["$first:localhost", "~second"]);
+    second.setStatus(EventStatus.NOT_SENT);
+    expect(conversationFromMatrixRoom(room, "@self:localhost").messages.map((message) => message.delivery)).toEqual(["sent", "failed"]);
+  });
   it("deduplicates event IDs and derives room state from the SDK room model", () => {
     const message = new MatrixEvent({
       event_id: "$message:localhost",

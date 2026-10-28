@@ -923,6 +923,7 @@ export class MatrixClientSession {
     client.on(sdk.ClientEvent.DeleteRoom, this.onDeleteRoom);
     client.on(sdk.ClientEvent.Event, this.onLiveEvent);
     client.on(sdk.RoomEvent.Timeline, this.onTimeline);
+    client.on(sdk.RoomEvent.LocalEchoUpdated, this.onRoomUpdate);
     client.on(sdk.RoomEvent.Name, this.onRoomUpdate);
     client.on(sdk.RoomEvent.MyMembership, this.onRoomUpdate);
     client.on(sdk.RoomEvent.Receipt, this.onRoomUpdate);
@@ -950,6 +951,7 @@ export class MatrixClientSession {
     client.removeListener(sdk.ClientEvent.DeleteRoom, this.onDeleteRoom);
     client.removeListener(sdk.ClientEvent.Event, this.onLiveEvent);
     client.removeListener(sdk.RoomEvent.Timeline, this.onTimeline);
+    client.removeListener(sdk.RoomEvent.LocalEchoUpdated, this.onRoomUpdate);
     client.removeListener(sdk.RoomEvent.Name, this.onRoomUpdate);
     client.removeListener(sdk.RoomEvent.MyMembership, this.onRoomUpdate);
     client.removeListener(sdk.RoomEvent.Receipt, this.onRoomUpdate);
