@@ -87,7 +87,7 @@ def authenticate_user(db: Session, login: str, password: str) -> User:
     return user
 
 
-def issue_session(db: Session, user: User) -> tuple[str, str]:
+def issue_session(db: Session, user: User) -> tuple[str, str, UUID]:
     refresh_value = create_refresh_token()
     refresh_record = RefreshToken(
         user_id=user.id,
@@ -97,7 +97,19 @@ def issue_session(db: Session, user: User) -> tuple[str, str]:
     )
     db.add(refresh_record)
     db.commit()
-    return create_access_token(user.id), refresh_value
+    return create_access_token(user.id), refresh_value, refresh_record.family_id
+
+
+def active_refresh_family(db: Session, raw_token: str | None) -> tuple[UUID, UUID] | None:
+    if not raw_token:
+        return None
+    record = refresh_tokens.get_for_update(db, hash_refresh_token(raw_token))
+    if record is None or record.revoked_at is not None or record.expires_at <= datetime.now(UTC):
+        return None
+    user = db.get(User, record.user_id)
+    if user is None or not user.is_active:
+        return None
+    return user.id, record.family_id
 
 
 def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
@@ -109,7 +121,7 @@ def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
             token_record.revoked_at = now
 
 
-def rotate_refresh_token(db: Session, raw_token: str) -> tuple[User, str, str]:
+def rotate_refresh_token(db: Session, raw_token: str) -> tuple[User, str, str, UUID]:
     now = datetime.now(UTC)
     token_record = refresh_tokens.get_for_update(db, hash_refresh_token(raw_token))
     if token_record is None:
@@ -139,7 +151,7 @@ def rotate_refresh_token(db: Session, raw_token: str) -> tuple[User, str, str]:
     token_record.revoked_at = now
     token_record.replaced_by_id = replacement.id
     db.commit()
-    return user, create_access_token(user.id, now), replacement_value
+    return user, create_access_token(user.id, now), replacement_value, token_record.family_id
 
 
 def revoke_refresh_token(db: Session, raw_token: str | None) -> None:

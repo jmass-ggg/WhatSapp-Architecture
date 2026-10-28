@@ -99,6 +99,25 @@ class MatrixClient:
             expires_in_ms=expires_in_ms,
         )
 
+    def session_is_valid(self, session: MatrixSession) -> bool:
+        try:
+            with httpx.Client(timeout=self.timeout, transport=self.transport) as client:
+                response = client.get(
+                    f"{self.base_url}/_matrix/client/v3/account/whoami",
+                    headers={"Authorization": f"Bearer {session.access_token}"},
+                )
+                if response.status_code in (401, 403):
+                    return False
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
+            raise MatrixConnectionError("Synapse session validation is unavailable") from exc
+        return (
+            isinstance(payload, dict)
+            and payload.get("user_id") == session.user_id
+            and payload.get("device_id") == session.device_id
+        )
+
     def logout(self, access_token: str) -> None:
         try:
             with httpx.Client(timeout=self.timeout, transport=self.transport) as client:

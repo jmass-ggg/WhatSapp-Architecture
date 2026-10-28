@@ -38,6 +38,7 @@ let browserHttpErrors = [];
 let browserAuthRequests = [];
 let unsupportedRtcTransportResponses = 0;
 let expectedE2eeSetupResponses = 0;
+let unauthenticatedRestoreResponses = 0;
 let genericNotFoundConsoleErrors = 0;
 let browserOffline = false;
 let lastLoginAttemptAt = 0;
@@ -445,6 +446,13 @@ function monitorPage(targetPage) {
   });
   targetPage.on("response", (response) => {
     if (
+      response.status() === 401 &&
+      new URL(response.url()).pathname.endsWith("/auth/restore")
+    ) {
+      unauthenticatedRestoreResponses += 1;
+      return;
+    }
+    if (
       response.status() === 404 &&
       response.url().includes(
         "/_matrix/client/unstable/org.matrix.msc4143/rtc/transports",
@@ -466,6 +474,13 @@ function monitorPage(targetPage) {
   });
   targetPage.on("console", (message) => {
     if (message.type() !== "error") return;
+    if (
+      message.text() ===
+        "Failed to load resource: the server responded with a status of 401 (Unauthorized)" &&
+      new URL(message.location().url).pathname.endsWith("/auth/restore")
+    ) {
+      return;
+    }
     if (
       targetPage === page &&
       browserOffline &&
@@ -539,6 +554,20 @@ try {
   const recoveryKeyB = await prepareBrowserRecovery(pageB);
   assert.notEqual(sessionA.user_id, sessionB.matrix.user_id);
   console.log("PASS Bob registered through the UI and was signed in automatically");
+
+  const restoreResponsePromise = pageB.waitForResponse(
+    (response) => new URL(response.url()).pathname.endsWith("/auth/restore"),
+    { timeout: 30_000 },
+  );
+  await pageB.reload();
+  const restoreResponse = await restoreResponsePromise;
+  assert.equal(restoreResponse.status(), 200);
+  const restoredSession = await restoreResponse.json();
+  assert.equal(restoredSession.matrix.device_id, sessionB.matrix.device_id);
+  await pageB.getByRole("status")
+    .filter({ hasText: "Encrypted chat ready" }).first()
+    .waitFor({ state: "visible", timeout: 45_000 });
+  console.log("PASS browser reload resumed Bob's Matrix device and crypto readiness");
 
   await page.getByRole("button", { name: "Start a new chat" }).click();
   const directoryDialog = page.getByRole("dialog", {
@@ -840,6 +869,7 @@ try {
   console.log("PASS restored Bob device sent an encrypted message that Alice decrypted");
 
   assert.deepEqual(browserErrors, []);
+  assert.equal(unauthenticatedRestoreResponses, 3);
   assert.deepEqual(consoleErrors, []);
   assert.deepEqual(browserHttpErrors, []);
   assert.equal(

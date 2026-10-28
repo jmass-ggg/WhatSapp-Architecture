@@ -48,6 +48,7 @@ export function MatrixSecurityDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [showLostRecoveryHelp, setShowLostRecoveryHelp] = useState(false);
 
   useEffect(() => {
     if (!manager || snapshot.cryptoStatus !== "ready") {
@@ -387,6 +388,31 @@ export function MatrixSecurityDialog({
                 <button type="button" className="security-button secondary" disabled={busy || !recoveryInput.trim()} onClick={() => void restoreHistory()}>
                   Restore encryption
                 </button>
+              </div>
+            )}
+            {(snapshot.cryptoOnboardingStatus === "restore_encryption" ||
+              snapshot.cryptoOnboardingStatus === "incomplete") && (
+              <div className="recovery-restore">
+                <button
+                  type="button"
+                  className="security-button secondary"
+                  onClick={() => setShowLostRecoveryHelp((shown) => !shown)}
+                  aria-expanded={showLostRecoveryHelp}
+                >
+                  Lost recovery key?
+                </button>
+                {showLostRecoveryHelp && (
+                  <p role="status">
+                    Keep any older signed-in device available: it may still have
+                    the room keys needed to read your history. Device verification
+                    confirms identity, but does not transfer those keys to this
+                    device. Find the recovery key saved during initial setup and
+                    enter it above. If neither the key nor a recoverable device
+                    exists, older encrypted messages may be permanently unreadable.
+                    Recruitable Chat will not reset your encryption identity or
+                    overwrite your backup automatically.
+                  </p>
+                )}
               </div>
             )}
           </section>

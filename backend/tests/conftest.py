@@ -53,6 +53,9 @@ class FakeMatrixClient:
             raise MatrixConnectionError("Synapse logout is unavailable")
         self.logout_tokens.append(access_token)
 
+    def session_is_valid(self, session: MatrixSession) -> bool:
+        return session.access_token not in self.logout_tokens
+
     def health(self) -> dict[str, int | str]:
         return {"status": "ok", "supported_versions": 1}
 

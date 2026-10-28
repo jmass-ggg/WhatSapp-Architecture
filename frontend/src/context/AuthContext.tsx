@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
   type PropsWithChildren,
@@ -69,6 +70,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mode, setMode] = useState<AuthMode | null>(null);
   const [matrixSession, setMatrixSession] = useState<MatrixSession | null>(null);
+  const [restoring, setRestoring] = useState(true);
+  const restorePromise = useRef<Promise<void> | null>(null);
   const matrixSessionRef = useRef<MatrixSession | null>(null);
   matrixSessionRef.current = matrixSession;
 
@@ -82,6 +85,25 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setMatrixSession(null);
     },
   });
+
+  useEffect(() => {
+    let current = true;
+    if (!restorePromise.current) {
+      restorePromise.current = (async () => {
+        const session = await api.request<LoginResponse>("/auth/restore", { method: "POST" });
+        api.setAccessToken(session.access_token);
+        const profile = await api.request<UserProfile>("/users/me");
+        matrixSessionRef.current = session.matrix;
+        setMatrixSession(session.matrix);
+        setUser(profile);
+        setMode("live");
+      })();
+    }
+    void restorePromise.current.catch(() => undefined).finally(() => {
+      if (current) setRestoring(false);
+    });
+    return () => { current = false; };
+  }, [api]);
 
   const signIn = useCallback(
     async ({ login, password }: LoginInput) => {
@@ -154,7 +176,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
     enterDemo,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>
+    {restoring ? <div role="status">Restoring session…</div> : children}
+  </AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

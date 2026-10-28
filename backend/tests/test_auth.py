@@ -106,6 +106,9 @@ def test_login_issues_app_and_matrix_sessions_with_separate_jwts(
     assert matrix_session["device_id"]
     assert "password" not in body
 
+    assert client.cookies.get("app_matrix_session")
+    assert matrix_session["access_token"] not in client.cookies.get("app_matrix_session")
+
     bridge_token, expected_user_id = matrix_client.login_requests[0]
     bridge_claims = jwt.decode(
         bridge_token,
@@ -143,6 +146,34 @@ def test_login_issues_app_and_matrix_sessions_with_separate_jwts(
     assert "httponly" in cookie
     assert "samesite=strict" in cookie
     assert client.cookies.get("app_refresh")
+
+
+def test_returning_login_and_reload_restore_reuse_matrix_device(
+    client: ApiClient, matrix_client,
+) -> None:
+    register(client)
+    first = login(client).json()["matrix"]
+    second = login(client).json()["matrix"]
+    assert second == first
+    assert len(matrix_client.login_requests) == 1
+
+    restored = client.post("/api/v1/auth/restore")
+    assert restored.status_code == 200
+    assert restored.json()["matrix"] == first
+    assert len(matrix_client.login_requests) == 1
+
+
+def test_matrix_cookie_cannot_resume_without_matching_refresh_session(
+    client: ApiClient,
+) -> None:
+    register(client)
+    assert login(client).status_code == 200
+    matrix_cookie = client.cookies.get("app_matrix_session")
+    assert matrix_cookie
+    client.cookies.delete("app_refresh")
+    assert client.post("/api/v1/auth/restore").status_code == 401
+    client.cookies.delete("app_matrix_session")
+    assert client.post("/api/v1/auth/restore").status_code == 401
 
 
 def test_two_app_users_get_distinct_synapse_sessions_without_matrix_passwords(
