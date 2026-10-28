@@ -9,7 +9,7 @@ function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string
   return typeof avatar === "string" ? avatar : null;
 }
 
-function timelineMessages(room: Room, ownUserId: string, recipientId?: string): Message[] {
+function timelineMessages(room: Room, ownUserId: string, recipientId?: string, deliveredIds?: ReadonlySet<string>): Message[] {
   const byEventId = new Map<string, Message>();
   const events = room.getLiveTimeline().getEvents();
   const receipt = recipientId
@@ -30,6 +30,9 @@ function timelineMessages(room: Room, ownUserId: string, recipientId?: string): 
       !event.getId()?.startsWith("~")) {
       message.delivery = "read";
       if (readAt) message.readAt = readAt;
+    } else if (message.sender === "me" && message.delivery === "sent" &&
+      event.getId() && deliveredIds?.has(event.getId()!)) {
+      message.delivery = "delivered";
     }
     byEventId.set(message.id, message);
   }
@@ -49,6 +52,7 @@ function latestVisibleEvent(room: Room): MatrixEvent | undefined {
 export function conversationFromMatrixRoom(
   room: Room,
   ownUserId: string,
+  deliveredIds?: ReadonlySet<string>,
 ): Conversation {
   const members = room
     .getMembers()
@@ -64,7 +68,7 @@ export function conversationFromMatrixRoom(
     "New conversation";
   const messages = timelineMessages(room, ownUserId,
     members.length === 1 && members[0].membership === "join"
-      ? members[0].userId : undefined);
+      ? members[0].userId : undefined, deliveredIds);
   const latest = messages.at(-1);
   const isEncrypted = room.hasEncryptionStateEvent();
   const typing = members.some((member) => member.typing);
@@ -110,10 +114,11 @@ export function conversationFromMatrixRoom(
 export function conversationsFromMatrixClient(
   rooms: Room[],
   ownUserId: string,
+  deliveredIds?: ReadonlySet<string>,
 ): Conversation[] {
   return rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
-    .map((room) => conversationFromMatrixRoom(room, ownUserId))
+    .map((room) => conversationFromMatrixRoom(room, ownUserId, deliveredIds))
     .filter((conversation) => !conversation.isGroup)
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }

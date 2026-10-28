@@ -4,7 +4,8 @@ import type {
   Room,
   SyncState,
 } from "matrix-js-sdk";
-import { MatrixEventEvent } from "matrix-js-sdk";
+import { EventStatus, MatrixEventEvent } from "matrix-js-sdk";
+import type { ReceivedToDeviceMessage } from "matrix-js-sdk/lib/sync-accumulator.js";
 import {
   CryptoEvent,
   OnlySignedDevicesIsolationMode,
@@ -45,6 +46,7 @@ import {
 import type { MatrixCryptoStoreIdentity } from "./crypto-store";
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { conversationsFromMatrixClient } from "./rooms";
+import { messageFromMatrixEvent } from "./events";
 import { SecretStorageKeyController } from "./secret-storage";
 
 export type MatrixConnectionStatus =
@@ -104,6 +106,10 @@ export const EMPTY_MATRIX_CONNECTION_SNAPSHOT: MatrixConnectionSnapshot = {
 };
 
 type SnapshotListener = () => void;
+const DELIVERY_ACK_TYPE = "org.recruitable.chat.delivery_ack.v1";
+const DELIVERY_LIMIT = 500;
+const serverEventId = (value: unknown): value is string =>
+  typeof value === "string" && value.startsWith("$") && value.length > 1;
 export type MatrixCryptoLockProvider = (
   lockName: string,
 ) => Promise<() => void>;
@@ -172,6 +178,15 @@ export class MatrixClientSession {
     (event: MatrixEvent, error?: Error) => void
   >();
   private readonly seenEventIds = new Set<string>();
+  private readonly queuedAcknowledgments = new Set<string>();
+  private readonly acknowledgmentsInFlight = new Set<string>();
+  private readonly deliveredIds = new Set<string>();
+  private readonly pendingAcknowledgments = new Map<string, ReceivedToDeviceMessage>();
+  private readonly awaitingContactPermission = new Map<string, MatrixEvent>();
+  private readonly awaitingAckPermission = new Map<string, ReceivedToDeviceMessage>();
+  private acceptedContacts: ReadonlySet<string> | null = null;
+  private acceptedContactsAt = 0;
+  private deliveryStorageKey: string | null = null;
   private retainCount = 0;
   private releaseGeneration = 0;
   private disposed = false;
@@ -277,15 +292,155 @@ export class MatrixClientSession {
     _removed?: boolean,
   ) => {
     this.watchForDecryption(event);
+    void this.acknowledgeDecryptedMessage(event);
+    this.retryPendingAcknowledgment(event);
     this.recordEvent(event);
     this.scheduleRoomRefresh();
   };
   private readonly onRoomUpdate = () => this.scheduleRoomRefresh();
   private readonly onLiveEvent = (event: MatrixEvent) => {
     this.watchForDecryption(event);
+    void this.acknowledgeDecryptedMessage(event);
+    this.retryPendingAcknowledgment(event);
     this.recordEvent(event);
     this.scheduleRoomRefresh();
   };
+  private readonly onToDeviceMessage = (payload: ReceivedToDeviceMessage) => {
+    this.acceptDeliveryAcknowledgment(payload);
+  };
+
+  private recipientForRoom(room: Room): string | null {
+    if (room.getMyMembership() !== "join" || !room.hasEncryptionStateEvent()) return null;
+    const joined = room.getJoinedMembers();
+    if (joined.length !== 2 || !joined.some((member) => member.userId === this.expectedUserId)) return null;
+    return joined.find((member) => member.userId !== this.expectedUserId)?.userId ?? null;
+  }
+
+  setAcceptedContacts(userIds: ReadonlySet<string> | null): void {
+    if (this.disposed) return;
+    this.acceptedContacts = userIds ? new Set(userIds) : null;
+    this.acceptedContactsAt = userIds ? Date.now() : 0;
+    if (!userIds) {
+      this.awaitingContactPermission.clear();
+      this.awaitingAckPermission.clear();
+      return;
+    }
+    for (const event of this.awaitingContactPermission.values()) {
+      void this.acknowledgeDecryptedMessage(event);
+    }
+    this.awaitingContactPermission.clear();
+    for (const payload of this.awaitingAckPermission.values()) {
+      this.acceptDeliveryAcknowledgment(payload);
+    }
+    this.awaitingAckPermission.clear();
+  }
+
+  private contactAllowed(userId: string): boolean {
+    return Date.now() - this.acceptedContactsAt < 20_000 &&
+      this.acceptedContacts?.has(userId) === true;
+  }
+
+  private remember(set: Set<string>, value: string): void {
+    set.add(value);
+    while (set.size > DELIVERY_LIMIT) set.delete(set.values().next().value!);
+    if (this.deliveryStorageKey) {
+      try {
+        localStorage.setItem(this.deliveryStorageKey, JSON.stringify({
+          queued: [...this.queuedAcknowledgments], delivered: [...this.deliveredIds],
+        }));
+      } catch { /* Storage is optional; the SDK still retains its queued to-device batches. */ }
+    }
+  }
+
+  private async acknowledgeDecryptedMessage(event: MatrixEvent): Promise<void> {
+    const client = this.clientInstance;
+    const crypto = this.crypto;
+    const eventId = event.getId();
+    const roomId = event.getRoomId();
+    if (this.disposed || !client || !crypto || !serverEventId(eventId) || !roomId ||
+      this.queuedAcknowledgments.has(eventId) || this.acknowledgmentsInFlight.has(eventId) || event.status ||
+      !event.isEncrypted() || event.isDecryptionFailure() || !event.getClearContent() ||
+      event.getType() !== "m.room.message" || event.getSender() === this.expectedUserId ||
+      !this.session.device_id) return;
+    const room = client.getRoom(roomId);
+    if (!room || this.recipientForRoom(room) !== event.getSender() ||
+      !messageFromMatrixEvent(event, roomId, this.expectedUserId)) return;
+    if (!this.contactAllowed(event.getSender()!)) {
+      if (!this.acceptedContacts || this.acceptedContacts.has(event.getSender()!)) {
+        this.awaitingContactPermission.set(eventId, event);
+        while (this.awaitingContactPermission.size > DELIVERY_LIMIT) {
+          this.awaitingContactPermission.delete(this.awaitingContactPermission.keys().next().value!);
+        }
+      }
+      return;
+    }
+    this.acknowledgmentsInFlight.add(eventId);
+    try {
+      const devices = await crypto.getUserDeviceInfo([event.getSender()!], true);
+      const targets = [...(devices.get(event.getSender()!)?.values() ?? [])]
+        .filter((device) => device.getIdentityKey() && device.verified !== -1)
+        .map((device) => ({ userId: event.getSender()!, deviceId: device.deviceId }));
+      if (!targets.length || this.disposed) return;
+      if (!this.contactAllowed(event.getSender()!)) return;
+      const batch = await crypto.encryptToDeviceMessages(DELIVERY_ACK_TYPE, targets, {
+        version: 1, roomId, eventId, deviceId: this.session.device_id,
+      });
+      if (!this.disposed && this.contactAllowed(event.getSender()!) &&
+        batch.eventType === "m.room.encrypted" && batch.batch.length) {
+        await client.queueToDevice(batch);
+        this.remember(this.queuedAcknowledgments, eventId);
+      }
+    } catch {
+      // An unsuccessful local queue can be retried on the next event callback.
+    } finally {
+      this.acknowledgmentsInFlight.delete(eventId);
+    }
+  }
+
+  private retryPendingAcknowledgment(event: MatrixEvent): void {
+    const eventId = event.getId();
+    if (!eventId) return;
+    const pending = this.pendingAcknowledgments.get(eventId);
+    if (pending) this.acceptDeliveryAcknowledgment(pending);
+  }
+
+  private acceptDeliveryAcknowledgment(payload: ReceivedToDeviceMessage): void {
+    if (this.disposed || payload.message.type !== DELIVERY_ACK_TYPE ||
+      !payload.encryptionInfo?.senderVerified || !payload.encryptionInfo.senderDevice ||
+      payload.message.sender !== payload.encryptionInfo.sender) return;
+    const content = payload.message.content;
+    if (!content || content.version !== 1 || !serverEventId(content.eventId) ||
+      typeof content.roomId !== "string" || !content.roomId.startsWith("!") ||
+      content.deviceId !== payload.encryptionInfo.senderDevice ||
+      this.deliveredIds.has(content.eventId)) return;
+    const room = this.clientInstance?.getRoom(content.roomId);
+    if (!room || this.recipientForRoom(room) !== payload.encryptionInfo.sender) return;
+    if (!this.contactAllowed(payload.encryptionInfo.sender)) {
+      if (!this.acceptedContacts || this.acceptedContacts.has(payload.encryptionInfo.sender)) {
+        this.awaitingAckPermission.set(content.eventId, payload);
+        while (this.awaitingAckPermission.size > DELIVERY_LIMIT) {
+          this.awaitingAckPermission.delete(this.awaitingAckPermission.keys().next().value!);
+        }
+      }
+      return;
+    }
+    const original = room.findEventById(content.eventId);
+    if (!original) {
+      this.pendingAcknowledgments.set(content.eventId, payload);
+      while (this.pendingAcknowledgments.size > DELIVERY_LIMIT) {
+        this.pendingAcknowledgments.delete(this.pendingAcknowledgments.keys().next().value!);
+      }
+      return;
+    }
+    if (original.getSender() !== this.expectedUserId ||
+      original.getRoomId() !== content.roomId || !serverEventId(original.getId()) ||
+      (original.status !== null && original.status !== undefined && original.status !== EventStatus.SENT) ||
+      !original.isEncrypted() ||
+      !messageFromMatrixEvent(original, content.roomId, this.expectedUserId)) return;
+    this.remember(this.deliveredIds, content.eventId);
+    this.pendingAcknowledgments.delete(content.eventId);
+    this.scheduleRoomRefresh();
+  }
   private readonly onVerificationRequest = (request: VerificationRequest) => {
     this.trackVerificationRequest(request);
   };
@@ -835,7 +990,10 @@ export class MatrixClientSession {
 
   private watchForDecryption(event: MatrixEvent): void {
     if (!event.isEncrypted() || this.decryptedEventListeners.has(event)) return;
-    const onDecrypted = () => this.scheduleRoomRefresh();
+    const onDecrypted = () => {
+      this.scheduleRoomRefresh();
+      void this.acknowledgeDecryptedMessage(event);
+    };
     this.decryptedEventListeners.set(event, onDecrypted);
     event.on(MatrixEventEvent.Decrypted, onDecrypted);
   }
@@ -911,6 +1069,13 @@ export class MatrixClientSession {
     for (const listener of this.listeners) listener();
     this.listeners.clear();
     this.seenEventIds.clear();
+    this.queuedAcknowledgments.clear();
+    this.acknowledgmentsInFlight.clear();
+    this.deliveredIds.clear();
+    this.pendingAcknowledgments.clear();
+    this.awaitingContactPermission.clear();
+    this.awaitingAckPermission.clear();
+    this.acceptedContacts = null;
   }
 
   private attachListeners(): void {
@@ -922,6 +1087,7 @@ export class MatrixClientSession {
     client.on(sdk.ClientEvent.Room, this.onClientRoom);
     client.on(sdk.ClientEvent.DeleteRoom, this.onDeleteRoom);
     client.on(sdk.ClientEvent.Event, this.onLiveEvent);
+    client.on(sdk.ClientEvent.ReceivedToDeviceMessage, this.onToDeviceMessage);
     client.on(sdk.RoomEvent.Timeline, this.onTimeline);
     client.on(sdk.RoomEvent.LocalEchoUpdated, this.onRoomUpdate);
     client.on(sdk.RoomEvent.Name, this.onRoomUpdate);
@@ -950,6 +1116,7 @@ export class MatrixClientSession {
     client.removeListener(sdk.ClientEvent.Room, this.onClientRoom);
     client.removeListener(sdk.ClientEvent.DeleteRoom, this.onDeleteRoom);
     client.removeListener(sdk.ClientEvent.Event, this.onLiveEvent);
+    client.removeListener(sdk.ClientEvent.ReceivedToDeviceMessage, this.onToDeviceMessage);
     client.removeListener(sdk.RoomEvent.Timeline, this.onTimeline);
     client.removeListener(sdk.RoomEvent.LocalEchoUpdated, this.onRoomUpdate);
     client.removeListener(sdk.RoomEvent.Name, this.onRoomUpdate);
@@ -985,6 +1152,16 @@ export class MatrixClientSession {
         this.session,
         getMatrixHomeserverUrl(),
       );
+      this.deliveryStorageKey = `luma-delivery-v1:${this.cryptoStoreIdentity.databasePrefix}`;
+      try {
+        const saved = JSON.parse(localStorage.getItem(this.deliveryStorageKey) ?? "null");
+        for (const id of Array.isArray(saved?.queued) ? saved.queued.slice(-DELIVERY_LIMIT) : []) {
+          if (serverEventId(id)) this.queuedAcknowledgments.add(id);
+        }
+        for (const id of Array.isArray(saved?.delivered) ? saved.delivered.slice(-DELIVERY_LIMIT) : []) {
+          if (serverEventId(id)) this.deliveredIds.add(id);
+        }
+      } catch { /* Storage may be unavailable. */ }
       this.cryptoStoreLockRelease = await this.lockProvider(
         this.cryptoStoreIdentity.lockName,
       );
@@ -1146,7 +1323,7 @@ export class MatrixClientSession {
     if (!client) return [];
     const userId = client.getUserId();
     return userId
-      ? conversationsFromMatrixClient(client.getRooms(), userId)
+      ? conversationsFromMatrixClient(client.getRooms(), userId, this.deliveredIds)
       : [];
   }
 

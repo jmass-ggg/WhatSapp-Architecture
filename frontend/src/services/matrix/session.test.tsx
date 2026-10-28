@@ -88,6 +88,7 @@ class FakeMatrixClient {
   readonly startClient = vi.fn(async () => undefined);
   readonly stopClient = vi.fn();
   readonly initRustCrypto = vi.fn(async () => undefined);
+  readonly queueToDevice = vi.fn(async () => undefined);
   readonly whoami = vi.fn(async () => ({
     user_id: this.userId,
     device_id: this.deviceId,
@@ -190,6 +191,104 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("Matrix client session lifecycle", () => {
+  it("queues an Olm acknowledgment only after a recipient decrypts an eligible message", async () => {
+    const encryptToDeviceMessages = vi.fn(async () => ({
+      eventType: "m.room.encrypted", batch: [{ userId: userA, deviceId: "DEVICE_A", payload: {} }],
+    }));
+    const crypto = {
+      ...fakeCrypto,
+      getUserDeviceInfo: vi.fn(async () => new Map([[userA, new Map([["DEVICE_A", {
+        deviceId: "DEVICE_A", verified: 1, getIdentityKey: () => "key",
+      }]])]])),
+      encryptToDeviceMessages,
+    };
+    const client = new FakeMatrixClient(userB, "DEVICE_B", crypto);
+    const event = new MatrixEvent({
+      event_id: "$encrypted:localhost", room_id: "!room:localhost", sender: userA,
+      type: "m.room.encrypted", content: { algorithm: "m.megolm.v1.aes-sha2" },
+    });
+    const joined = [{ userId: userA }, { userId: userB }];
+    client.rooms = [{
+      ...room("!room:localhost", "Alice"),
+      getJoinedMembers: () => joined,
+      hasEncryptionStateEvent: () => true,
+      getLiveTimeline: () => ({ getEvents: () => [event] }),
+    } as unknown as Room];
+    const manager = new MatrixClientSession(matrixSession(userB, "DEVICE_B"), userB,
+      factoryFor(client), testLockProvider);
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+    client.emit(ClientEvent.Event, event);
+    expect(encryptToDeviceMessages).not.toHaveBeenCalled();
+    vi.spyOn(event, "getClearContent").mockReturnValue({ msgtype: "m.text", body: "hello" });
+    vi.spyOn(event, "getType").mockReturnValue("m.room.message");
+    client.emit(ClientEvent.Event, event);
+    expect(encryptToDeviceMessages).not.toHaveBeenCalled();
+    manager.setAcceptedContacts(new Set([userA]));
+    await waitFor(() => expect(client.queueToDevice).toHaveBeenCalledTimes(1));
+    expect(encryptToDeviceMessages).toHaveBeenCalledWith(
+      "org.recruitable.chat.delivery_ack.v1",
+      [{ userId: userA, deviceId: "DEVICE_A" }],
+      { version: 1, roomId: "!room:localhost", eventId: "$encrypted:localhost", deviceId: "DEVICE_B" },
+    );
+    client.emit(ClientEvent.Event, event);
+    expect(client.queueToDevice).toHaveBeenCalledTimes(1);
+    manager.dispose();
+    expect(client.listenerCount(ClientEvent.ReceivedToDeviceMessage)).toBe(0);
+  });
+  it("accepts only verified recipient-device acknowledgments for its sent message", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const original = new MatrixEvent({
+      event_id: "$sent:localhost", room_id: "!room:localhost", sender: userA,
+      type: "m.room.encrypted", content: { algorithm: "m.megolm.v1.aes-sha2" },
+    });
+    vi.spyOn(original, "getClearContent").mockReturnValue({ msgtype: "m.text", body: "hello" });
+    vi.spyOn(original, "getType").mockReturnValue("m.room.message");
+    const joined = [{ userId: userA }, { userId: userB }];
+    client.rooms = [{
+      ...room("!room:localhost", "Bob"),
+      getMembers: () => [{ userId: userB, membership: "join", name: "Bob", events: {} }],
+      getJoinedMembers: () => joined,
+      hasEncryptionStateEvent: () => true,
+      getLiveTimeline: () => ({ getEvents: () => [original] }),
+      findEventById: (id: string) => id === "$sent:localhost" ? original : undefined,
+    } as unknown as Room];
+    const manager = new MatrixClientSession(matrixSession(), userA,
+      factoryFor(client), testLockProvider);
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
+    const acknowledgment = (overrides: Record<string, unknown> = {}) => ({
+      message: {
+        type: "org.recruitable.chat.delivery_ack.v1", sender: userB,
+        content: { version: 1, roomId: "!room:localhost", eventId: "$sent:localhost", deviceId: "DEVICE_B" },
+      },
+      encryptionInfo: { sender: userB, senderDevice: "DEVICE_B", senderVerified: true },
+      ...overrides,
+    });
+    const delivery = () => manager.getSnapshot().rooms[0].messages[0].delivery;
+    expect(delivery()).toBe("sent");
+    manager.setAcceptedContacts(new Set());
+    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment());
+    await flushMicrotasks();
+    expect(delivery()).toBe("sent");
+    manager.setAcceptedContacts(new Set([userB]));
+    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment({ encryptionInfo: null }));
+    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment({
+      encryptionInfo: { sender: userB, senderDevice: "DEVICE_B", senderVerified: false },
+    }));
+    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment({
+      message: { ...acknowledgment().message, content: { version: 1, roomId: "!room:localhost", eventId: "$wrong:localhost", deviceId: "DEVICE_B" } },
+    }));
+    await flushMicrotasks();
+    expect(delivery()).toBe("sent");
+    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment());
+    await waitFor(() => expect(delivery()).toBe("delivered"));
+    const previousRooms = manager.getSnapshot().rooms;
+    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment());
+    await flushMicrotasks();
+    expect(manager.getSnapshot().rooms).toBe(previousRooms);
+    manager.dispose();
+  });
   it("automatically initializes cross-signing for a new account without creating a recovery backup", async () => {
     let crossSigningReady = false;
     const crypto = {

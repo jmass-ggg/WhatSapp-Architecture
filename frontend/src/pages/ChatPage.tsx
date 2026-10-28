@@ -120,12 +120,18 @@ export function ChatPage() {
           api.request<UserConnection[]>("/connections/requests/incoming"),
           api.request<UserConnection[]>("/connections/requests/outgoing"),
         ]);
+        matrixContext.manager?.setAcceptedContacts(new Set(
+          accepted.filter((connection) => connection.status === "accepted")
+            .map((connection) => matrixUserIdForAppUserId(connection.other_user.id)),
+        ));
         setConnections(accepted);
         setIncomingRequests(incoming);
         setOutgoingRequests(outgoing);
         setConnectionError(null);
         return true;
       } catch (cause) {
+        matrixContext.manager?.setAcceptedContacts(null);
+        setConnections([]);
         setConnectionError(
           cause instanceof Error
             ? cause.message
@@ -136,8 +142,10 @@ export function ChatPage() {
         if (showLoading) setRequestsLoading(false);
       }
     },
-    [api, mode, user],
+    [api, matrixContext.manager, mode, user],
   );
+
+  useEffect(() => () => matrixContext.manager?.setAcceptedContacts(null), [matrixContext.manager]);
 
   useEffect(() => {
     void refreshConnections(true);
