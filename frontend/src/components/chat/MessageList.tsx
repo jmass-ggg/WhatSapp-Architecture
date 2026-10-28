@@ -128,7 +128,7 @@ export function MessageList({
       {conversation.isTyping && !term && (
         <div className="typing-row">
           <span className="typing-dots"><i /><i /><i /></span>
-          <span>{conversation.name} is typing</span>
+          <span>{conversation.name} is typing…</span>
         </div>
       )}
     </div>

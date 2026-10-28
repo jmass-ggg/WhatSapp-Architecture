@@ -6,12 +6,15 @@ import {
   X,
 } from "lucide-react";
 import {
+  useCallback,
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import type { MatrixClient } from "matrix-js-sdk";
 
 interface MessageComposerProps {
   disabled?: boolean;
@@ -20,6 +23,9 @@ interface MessageComposerProps {
   placeholder?: string;
   hint?: string;
   onSend: (text: string, file?: File) => Promise<void>;
+  typingClient?: MatrixClient | null;
+  typingRoomId?: string;
+  typingAllowed?: boolean;
 }
 
 const emojis = ["😊", "✨", "❤️", "🙌", "😂", "👍", "🎉", "☀️"];
@@ -31,6 +37,9 @@ export function MessageComposer({
   placeholder = "Write a message…",
   hint = "Enter to send · Shift + Enter for a new line",
   onSend,
+  typingClient,
+  typingRoomId,
+  typingAllowed = false,
 }: MessageComposerProps) {
   const [value, setValue] = useState("");
   const [file, setFile] = useState<File | undefined>();
@@ -40,6 +49,48 @@ export function MessageComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const isBusy = busy || sending;
+  const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typingActive = useRef(false);
+  const typingTarget = useRef<{ client: MatrixClient; roomId: string } | null>(null);
+
+  const stopTyping = useCallback(() => {
+    if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    if (refreshTimer.current) clearInterval(refreshTimer.current);
+    inactivityTimer.current = null;
+    refreshTimer.current = null;
+    if (typingActive.current && typingTarget.current) {
+      const { client, roomId } = typingTarget.current;
+      void client.sendTyping(roomId, false, 0).catch(() => {});
+    }
+    typingActive.current = false;
+    typingTarget.current = null;
+  }, []);
+
+  useEffect(() => stopTyping, [stopTyping, typingClient, typingRoomId, typingAllowed, disabled, isBusy]);
+
+  function updateTyping(text: string) {
+    if (!text.trim() || disabled || isBusy || !typingAllowed || !typingClient || !typingRoomId) {
+      stopTyping();
+      return;
+    }
+    const client = typingClient;
+    const roomId = typingRoomId;
+    if (!typingActive.current) {
+      typingActive.current = true;
+      typingTarget.current = { client, roomId };
+      void client.sendTyping(roomId, true, 5000).catch(() => {});
+    }
+    if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    inactivityTimer.current = setTimeout(stopTyping, 2500);
+    if (!refreshTimer.current) {
+      refreshTimer.current = setInterval(() => {
+        if (typingActive.current && typingTarget.current?.client === client && typingTarget.current.roomId === roomId) {
+          void client.sendTyping(roomId, true, 5000).catch(() => {});
+        }
+      }, 4000);
+    }
+  }
 
   async function submit() {
     const text = value.trim();
@@ -53,6 +104,7 @@ export function MessageComposer({
     setSending(true);
     try {
       await onSend(text, file);
+      stopTyping();
       setValue("");
       setFile(undefined);
       if (fileRef.current) fileRef.current.value = "";
@@ -86,7 +138,9 @@ export function MessageComposer({
   }
 
   function appendEmoji(emoji: string) {
-    setValue((current) => `${current}${emoji}`);
+    const next = `${value}${emoji}`;
+    setValue(next);
+    updateTyping(next);
     setEmojiOpen(false);
     textareaRef.current?.focus();
   }
@@ -167,6 +221,7 @@ export function MessageComposer({
           value={value}
           onChange={(event) => {
             setValue(event.target.value);
+            updateTyping(event.target.value);
             event.currentTarget.style.height = "auto";
             event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 132)}px`;
           }}

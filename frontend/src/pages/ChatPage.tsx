@@ -859,6 +859,15 @@ export function ChatPage() {
 
           {selectedConversation && canShowComposer && (
             <MessageComposer
+              key={selectedConversation.id}
+              typingClient={mode === "live" ? matrixContext.client : null}
+              typingRoomId={selectedRoom?.roomId}
+              typingAllowed={Boolean(
+                mode === "live" && matrix.status === "connected" &&
+                selectedRoom?.getMyMembership() === "join" &&
+                selectedConversation.connectionAllowed === true &&
+                canSendEncryptedMessage
+              )}
               disabled={
                 mode === "live" &&
                 (isInvited || !selectedConversation.isEncrypted ||

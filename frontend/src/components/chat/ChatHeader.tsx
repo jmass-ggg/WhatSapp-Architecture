@@ -51,13 +51,13 @@ export function ChatHeader({
     !conversation.isGroup &&
     conversation.connectionAllowed !== true
       ? "Connection required · sending blocked"
-      : conversation.isEncrypted
+      : conversation.isTyping
+    ? "typing…"
+    : conversation.isEncrypted
     ? cryptoStatus === "ready"
       ? "End-to-end encrypted · Rust crypto"
       : "Encrypted room · crypto unavailable"
-    : conversation.isTyping
-      ? "typing…"
-      : conversation.isOnline
+    : conversation.isOnline
         ? "Online now"
         : mode === "demo"
           ? "Usually replies quickly"
