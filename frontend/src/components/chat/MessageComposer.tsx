@@ -15,6 +15,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { MatrixClient } from "matrix-js-sdk";
+import type { Message } from "../../types";
 
 interface MessageComposerProps {
   disabled?: boolean;
@@ -26,6 +27,8 @@ interface MessageComposerProps {
   typingClient?: MatrixClient | null;
   typingRoomId?: string;
   typingAllowed?: boolean;
+  replyTo?: Message | null;
+  onCancelReply?: () => void;
 }
 
 const emojis = ["😊", "✨", "❤️", "🙌", "😂", "👍", "🎉", "☀️"];
@@ -40,6 +43,8 @@ export function MessageComposer({
   typingClient,
   typingRoomId,
   typingAllowed = false,
+  replyTo,
+  onCancelReply,
 }: MessageComposerProps) {
   const [value, setValue] = useState("");
   const [file, setFile] = useState<File | undefined>();
@@ -147,6 +152,7 @@ export function MessageComposer({
 
   return (
     <div className="composer-wrap">
+      {replyTo && <div className="reply-preview composer-reply-preview"><strong>Replying to {replyTo.sender === "me" ? "You" : replyTo.senderName || "Unknown"}</strong><span>{replyTo.text || replyTo.attachment?.name || "Message"}</span><button type="button" aria-label="Cancel reply" onClick={onCancelReply}><X size={15} /></button></div>}
       {error && <p className="composer-error" role="alert">{error}</p>}
       {file && (
         <div className="pending-attachment">

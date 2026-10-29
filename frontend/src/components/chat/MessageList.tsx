@@ -10,6 +10,7 @@ interface MessageListProps {
   searchTerm: string;
   searchOpen: boolean;
   conversationRouteId?: string;
+  onReply?: (message: Message) => void;
 }
 
 function dayLabel(date: Date): string {
@@ -42,6 +43,7 @@ export function MessageList({
   searchTerm,
   searchOpen,
   conversationRouteId,
+  onReply,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const term = searchTerm.trim().toLowerCase();
@@ -120,6 +122,8 @@ export function MessageList({
                 message={message}
                 conversation={conversation}
                 matrixSession={matrixSession}
+                onReply={onReply}
+                onJump={(eventId) => scrollRef.current?.querySelector(`[data-event-id="${CSS.escape(eventId)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
               />
             ))}
           </section>

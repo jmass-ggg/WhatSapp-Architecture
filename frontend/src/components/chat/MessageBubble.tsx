@@ -7,6 +7,8 @@ interface MessageBubbleProps {
   message: Message;
   conversation: Conversation;
   matrixSession: MatrixSession | null;
+  onReply?: (message: Message) => void;
+  onJump?: (eventId: string) => void;
 }
 
 function formatMessageTime(date: Date): string {
@@ -33,6 +35,8 @@ export function MessageBubble({
   message,
   conversation,
   matrixSession,
+  onReply,
+  onJump,
 }: MessageBubbleProps) {
   const outgoing = message.sender === "me";
   return (
@@ -49,10 +53,10 @@ export function MessageBubble({
         )}
         <div className={`message-bubble${message.attachment ? " has-attachment" : ""}`}>
           {message.replyTo && (
-            <div className="reply-preview">
+            <button type="button" className="reply-preview" onClick={() => message.replyTo?.eventId && onJump?.(message.replyTo.eventId)}>
               <strong>{message.replyTo.sender}</strong>
               <span>{message.replyTo.text}</span>
-            </div>
+            </button>
           )}
           {message.attachment && (
             <AttachmentCard
@@ -73,6 +77,7 @@ export function MessageBubble({
             )}
           </span>
         </div>
+        {onReply && message.matrix?.eventId.startsWith("$") && message.delivery !== "sending" && <button type="button" className="message-reply-action" onClick={() => onReply(message)}>Reply</button>}
         {message.reaction && (
           <button
             type="button"

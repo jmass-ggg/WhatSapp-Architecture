@@ -91,6 +91,8 @@ export function messageFromMatrixEvent(
       ? (content.info as Record<string, unknown>)
       : {};
   const mediaUri = typeof content.url === "string" ? content.url : undefined;
+  const relation = content["m.relates_to"] as { "m.in_reply_to"?: { event_id?: unknown } } | undefined;
+  const replyEventId = relation?.["m.in_reply_to"]?.event_id;
 
   return {
     id: eventId ?? `local-${senderId}-${event.getTs()}-${body}`,
@@ -99,6 +101,7 @@ export function messageFromMatrixEvent(
     text: isFile ? "" : body,
     sentAt,
     delivery: senderId === ownUserId ? outgoingDelivery(event) : "sent",
+    ...(typeof replyEventId === "string" ? { replyTo: { eventId: replyEventId, sender: "", text: "Original message unavailable" } } : {}),
     ...(isFile
       ? {
           attachment: {

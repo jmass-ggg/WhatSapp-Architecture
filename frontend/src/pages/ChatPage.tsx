@@ -76,6 +76,7 @@ export function ChatPage() {
   const [mutedIds, setMutedIds] = useState<Set<string>>(() => new Set());
   const [wallpaperIds, setWallpaperIds] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [joiningRoom, setJoiningRoom] = useState(false);
   const [connections, setConnections] = useState<UserConnection[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<UserConnection[]>([]);
@@ -283,6 +284,7 @@ export function ChatPage() {
     null;
   const mobileDetailOpen = Boolean(conversationId && selectedConversation);
   const selectedId = selectedConversation?.id;
+  useEffect(() => setReplyTo(null), [selectedId]);
   const selectedRoom = mode === "live" && selectedId
     ? matrixContext.client?.getRoom(selectedId)
     : null;
@@ -622,7 +624,9 @@ export function ChatPage() {
           matrixContext.client,
           roomId,
           text,
+          replyTo?.matrix?.eventId,
         );
+        setReplyTo(null);
         return;
       }
       if (mode !== "demo") {
@@ -636,6 +640,7 @@ export function ChatPage() {
         text,
         sentAt,
         delivery: "read",
+        ...(replyTo ? { replyTo: { sender: replyTo.sender === "me" ? "You" : replyTo.senderName || "Unknown", text: replyTo.text } } : {}),
         ...(file
           ? {
               attachment: {
@@ -664,6 +669,7 @@ export function ChatPage() {
             : conversation,
         ),
       );
+      setReplyTo(null);
     },
     [
       matrixContext.client,
@@ -672,6 +678,7 @@ export function ChatPage() {
       matrixContext.crossSigningReady,
       mode,
       selectedConversation,
+      replyTo,
       verifyAcceptedContact,
     ],
   );
@@ -867,6 +874,7 @@ export function ChatPage() {
             searchTerm={messageSearch}
             searchOpen={searchOpen}
             conversationRouteId={conversationId}
+            onReply={setReplyTo}
           />
 
           {selectedConversation && mode === "live" &&
@@ -879,6 +887,8 @@ export function ChatPage() {
           {selectedConversation && canShowComposer && (
             <MessageComposer
               key={selectedConversation.id}
+              replyTo={replyTo}
+              onCancelReply={() => setReplyTo(null)}
               typingClient={mode === "live" ? matrixContext.client : null}
               typingRoomId={selectedRoom?.roomId}
               typingAllowed={Boolean(

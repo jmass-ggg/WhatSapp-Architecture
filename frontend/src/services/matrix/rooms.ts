@@ -36,6 +36,13 @@ function timelineMessages(room: Room, ownUserId: string, recipientId?: string, d
     }
     byEventId.set(message.id, message);
   }
+  for (const message of byEventId.values()) {
+    if (!message.replyTo?.eventId) continue;
+    const original = byEventId.get(message.replyTo.eventId);
+    message.replyTo = original && original.matrix?.encryptionStatus !== "failed" && original.matrix?.encryptionStatus !== "pending"
+      ? { eventId: message.replyTo.eventId, sender: original.sender === "me" ? "You" : original.senderName || "Unknown", text: original.text || original.attachment?.name || "Message unavailable" }
+      : { eventId: message.replyTo.eventId, sender: "Original message", text: "Original message unavailable" };
+  }
   return [...byEventId.values()]
     .sort((left, right) => left.sentAt.getTime() - right.sentAt.getTime())
     .slice(-100);

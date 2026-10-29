@@ -90,6 +90,7 @@ export interface Message {
   readAt?: Date;
   attachment?: Attachment;
   replyTo?: {
+    eventId?: string;
     sender: string;
     text: string;
   };

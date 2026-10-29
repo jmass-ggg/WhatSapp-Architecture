@@ -1,5 +1,5 @@
 import type { MatrixClient } from "matrix-js-sdk";
-import { EventType, Preset, Visibility } from "matrix-js-sdk";
+import { EventType, MsgType, Preset, Visibility } from "matrix-js-sdk";
 import type { ISendEventResponse } from "matrix-js-sdk";
 
 export const MATRIX_ROOM_ENCRYPTION_ALGORITHM = "m.megolm.v1.aes-sha2";
@@ -61,6 +61,7 @@ export async function sendEncryptedTextMessage(
   client: MatrixClient,
   roomId: string,
   text: string,
+  replyEventId?: string,
 ): Promise<ISendEventResponse> {
   const body = text.trim();
   if (!body) throw new Error("Message is empty.");
@@ -96,6 +97,9 @@ export async function sendEncryptedTextMessage(
       "This room is not confirmed as encrypted. The message was not sent.",
     );
   }
+  if (replyEventId && (!replyEventId.startsWith("$") || !room.findEventById(replyEventId))) {
+    throw new Error("The original message is not confirmed in this room.");
+  }
 
   const encryptionState = await client.getStateEvent(
     roomId,
@@ -113,7 +117,9 @@ export async function sendEncryptedTextMessage(
 
   // MatrixClient performs Megolm encryption and Olm key distribution locally.
   // If that fails, the SDK rejects this call; this code never falls back to plaintext.
-  return client.sendTextMessage(roomId, body);
+  return replyEventId
+    ? client.sendMessage(roomId, { msgtype: MsgType.Text, body, "m.relates_to": { "m.in_reply_to": { event_id: replyEventId } } })
+    : client.sendTextMessage(roomId, body);
 }
 
 async function waitForSdkEncryptionState(
