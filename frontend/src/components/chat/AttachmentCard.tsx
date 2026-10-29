@@ -2,6 +2,7 @@ import { Download, FileText, Image as ImageIcon, LoaderCircle } from "lucide-rea
 import { useEffect, useState } from "react";
 
 import { fetchMatrixMedia } from "../../services/matrix/media";
+import { MAX_ATTACHMENT_BYTES } from "../../services/matrix/attachments";
 import type { Attachment } from "../../types";
 
 interface AttachmentCardProps {
@@ -29,10 +30,10 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
 
     let active = true;
     let objectUrl: string | null = null;
-    void fetchMatrixMedia(matrixToken, attachment.mediaUri)
+    void fetchMatrixMedia(matrixToken, attachment.mediaUri, MAX_ATTACHMENT_BYTES)
       .then((blob) => {
         if (!active) return;
-        objectUrl = URL.createObjectURL(blob);
+        objectUrl = URL.createObjectURL(new Blob([blob], { type: isImage ? attachment.mimeType || "image/png" : "application/octet-stream" }));
         setMediaSource(objectUrl);
       })
       .catch(() => {
@@ -43,7 +44,7 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.mediaUri, attachment.url, matrixToken]);
+  }, [attachment.mediaUri, attachment.mimeType, attachment.url, matrixToken, isImage]);
 
   if (isImage) {
     return (

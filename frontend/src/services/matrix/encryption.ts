@@ -66,6 +66,13 @@ export async function sendEncryptedTextMessage(
   const body = text.trim();
   if (!body) throw new Error("Message is empty.");
 
+  await assertEncryptedSendReady(client, roomId, replyEventId);
+  return replyEventId
+    ? client.sendMessage(roomId, { msgtype: MsgType.Text, body, "m.relates_to": { "m.in_reply_to": { event_id: replyEventId } } })
+    : client.sendTextMessage(roomId, body);
+}
+
+export async function assertEncryptedSendReady(client: MatrixClient, roomId: string, replyEventId?: string): Promise<void> {
   const crypto = client.getCrypto();
   if (!crypto) {
     throw new Error("Matrix Rust crypto is unavailable; message was not sent.");
@@ -117,9 +124,6 @@ export async function sendEncryptedTextMessage(
 
   // MatrixClient performs Megolm encryption and Olm key distribution locally.
   // If that fails, the SDK rejects this call; this code never falls back to plaintext.
-  return replyEventId
-    ? client.sendMessage(roomId, { msgtype: MsgType.Text, body, "m.relates_to": { "m.in_reply_to": { event_id: replyEventId } } })
-    : client.sendTextMessage(roomId, body);
 }
 
 async function waitForSdkEncryptionState(

@@ -16,7 +16,8 @@ import { Toast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
 import { useMatrixContext } from "../context/MatrixContext";
 import { useMatrixRooms } from "../hooks/useMatrixRooms";
-import { sendEncryptedTextMessage } from "../services/matrix/encryption";
+import { assertEncryptedSendReady, sendEncryptedTextMessage } from "../services/matrix/encryption";
+import { sendAttachment } from "../services/matrix/attachments";
 import { matrixUserIdForAppUserId } from "../services/matrix/identity";
 import type { Conversation, DirectoryUser, Message, UserConnection } from "../types";
 import { getDemoConversations } from "../utils/demoData";
@@ -77,6 +78,7 @@ export function ChatPage() {
   const [wallpaperIds, setWallpaperIds] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<ToastState | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [attachmentProgress, setAttachmentProgress] = useState("");
   const [joiningRoom, setJoiningRoom] = useState(false);
   const [connections, setConnections] = useState<UserConnection[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<UserConnection[]>([]);
@@ -551,11 +553,6 @@ export function ChatPage() {
       if (!selectedConversation) return;
 
       if (mode === "live") {
-        if (file) {
-          throw new Error(
-            "Encrypted file attachments are not implemented. The file was not sent.",
-          );
-        }
         if (!selectedConversation.isEncrypted) {
           throw new Error(
             "This room is not encrypted. The message was not sent.",
@@ -620,12 +617,16 @@ export function ChatPage() {
         ) {
           throw new Error("You do not have permission to send encrypted messages in this room.");
         }
-        await sendEncryptedTextMessage(
-          matrixContext.client,
-          roomId,
-          text,
-          replyTo?.matrix?.eventId,
-        );
+        if (file) {
+          try {
+            await assertEncryptedSendReady(matrixContext.client, roomId, replyTo?.matrix?.eventId);
+            await sendAttachment(matrixContext.client, roomId, file, replyTo?.matrix?.eventId, setAttachmentProgress);
+            if (text.trim()) await sendEncryptedTextMessage(matrixContext.client, roomId, text);
+          } catch (error) {
+            setAttachmentProgress("Failed");
+            throw error;
+          }
+        } else await sendEncryptedTextMessage(matrixContext.client, roomId, text, replyTo?.matrix?.eventId);
         setReplyTo(null);
         return;
       }
@@ -905,7 +906,8 @@ export function ChatPage() {
                   matrixContext.crossSigningReady !== true ||
                   !canSendEncryptedMessage)
               }
-              attachmentsDisabled={mode === "live"}
+              attachmentsDisabled={false}
+              uploadStatus={attachmentProgress}
               busy={false}
               placeholder={
                 selectedConversation.isEncrypted

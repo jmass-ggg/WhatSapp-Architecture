@@ -16,6 +16,7 @@ import {
 } from "react";
 import type { MatrixClient } from "matrix-js-sdk";
 import type { Message } from "../../types";
+import { validateAttachment } from "../../services/matrix/attachments";
 
 interface MessageComposerProps {
   disabled?: boolean;
@@ -29,6 +30,7 @@ interface MessageComposerProps {
   typingAllowed?: boolean;
   replyTo?: Message | null;
   onCancelReply?: () => void;
+  uploadStatus?: string;
 }
 
 const emojis = ["😊", "✨", "❤️", "🙌", "😂", "👍", "🎉", "☀️"];
@@ -45,9 +47,11 @@ export function MessageComposer({
   typingAllowed = false,
   replyTo,
   onCancelReply,
+  uploadStatus,
 }: MessageComposerProps) {
   const [value, setValue] = useState("");
   const [file, setFile] = useState<File | undefined>();
+  const [filePreview, setFilePreview] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
@@ -58,6 +62,12 @@ export function MessageComposer({
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const typingActive = useRef(false);
   const typingTarget = useRef<{ client: MatrixClient; roomId: string } | null>(null);
+  useEffect(() => {
+    if (!file || !file.type.startsWith("image/")) { setFilePreview(null); return; }
+    const url = URL.createObjectURL(file);
+    setFilePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   const stopTyping = useCallback(() => {
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
@@ -138,8 +148,12 @@ export function MessageComposer({
   }
 
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
-    setFile(event.target.files?.[0]);
-    setError("");
+    const selected = event.target.files?.[0];
+    if (!selected) return;
+    void validateAttachment(selected).then(() => { setFile(selected); setError(""); }).catch((cause: Error) => {
+      setError(cause.message);
+      event.target.value = "";
+    });
   }
 
   function appendEmoji(emoji: string) {
@@ -154,10 +168,11 @@ export function MessageComposer({
     <div className="composer-wrap">
       {replyTo && <div className="reply-preview composer-reply-preview"><strong>Replying to {replyTo.sender === "me" ? "You" : replyTo.senderName || "Unknown"}</strong><span>{replyTo.text || replyTo.attachment?.name || "Message"}</span><button type="button" aria-label="Cancel reply" onClick={onCancelReply}><X size={15} /></button></div>}
       {error && <p className="composer-error" role="alert">{error}</p>}
+      {uploadStatus && <p role="status">{uploadStatus}</p>}
       {file && (
         <div className="pending-attachment">
-          <FilePlus2 size={16} />
-          <span>{file.name}</span>
+          {filePreview ? <img src={filePreview} alt="Selected attachment preview" className="pending-attachment-preview" /> : <FilePlus2 size={16} />}
+          <span>{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MiB</span>
           <button
             type="button"
             aria-label="Remove attachment"
@@ -214,6 +229,7 @@ export function MessageComposer({
                 ref={fileRef}
                 className="sr-only"
                 type="file"
+                accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.txt,.xls,.xlsx,.csv,.ppt,.pptx"
                 onChange={handleFile}
                 aria-label="Choose a file to attach"
                 disabled={disabled || isBusy}
