@@ -59,6 +59,7 @@ describe("Matrix client configuration", () => {
       accessToken: session.access_token,
       userId: session.user_id,
       deviceId: session.device_id,
+      timelineSupport: true,
     });
     expect(options?.store).toBeInstanceOf(MemoryStore);
   });

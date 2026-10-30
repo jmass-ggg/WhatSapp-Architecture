@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Conversation, Message } from "../../types";
 import { MessageBubble } from "./MessageBubble";
@@ -24,4 +24,107 @@ it("shows SDK-derived outgoing status and no receipt for incoming messages", () 
   view.rerender(<MessageBubble message={{ ...message, sender: "them" }} conversation={conversation} matrixSession={null} />);
   expect(screen.queryByText("Not sent")).toBeNull();
   expect(screen.queryByLabelText("Sent")).toBeNull();
+});
+
+describe("message pin actions and timestamps", () => {
+  const conversation = { id: "!room:localhost", isGroup: true } as Conversation;
+  const message = {
+    id: "$message:localhost",
+    sender: "them",
+    senderName: "Kelly Boyle",
+    text: "Please check this",
+    sentAt: new Date("2026-10-30T15:07:00.000Z"),
+    delivery: "sent",
+    matrix: {
+      eventId: "$message:localhost",
+      roomId: "!room:localhost",
+      eventType: "m.room.encrypted",
+      senderId: "@kelly:localhost",
+    },
+  } as Message;
+
+  it("opens accessible actions and calls pin and unpin handlers", () => {
+    const onTogglePin = vi.fn();
+    const view = render(
+      <MessageBubble
+        message={message}
+        conversation={conversation}
+        matrixSession={null}
+        canManagePins
+        onTogglePin={onTogglePin}
+        isPinned={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin message" }));
+    expect(onTogglePin).toHaveBeenCalledWith("$message:localhost");
+
+    view.rerender(
+      <MessageBubble
+        message={message}
+        conversation={conversation}
+        matrixSession={null}
+        canManagePins
+        onTogglePin={onTogglePin}
+        isPinned
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin message" }));
+    expect(onTogglePin).toHaveBeenLastCalledWith("$message:localhost");
+    expect(screen.getByLabelText("Pinned message")).toBeTruthy();
+  });
+
+  it("shows a readable full timestamp and safely handles invalid dates", () => {
+    const view = render(
+      <MessageBubble message={message} conversation={conversation} matrixSession={null} />,
+    );
+    const time = screen.getByText(/^\d{1,2}:\d{2}\s?(AM|PM)$/i);
+    expect(time.getAttribute("title")).toBeTruthy();
+    expect(time.getAttribute("dateTime")).toBe(message.sentAt?.toISOString());
+
+    view.rerender(
+      <MessageBubble
+        message={{ ...message, sentAt: new Date(Number.NaN) }}
+        conversation={conversation}
+        matrixSession={null}
+      />,
+    );
+    expect(screen.getByText("Time unavailable")).toBeTruthy();
+    expect(screen.queryByText("Invalid Date")).toBeNull();
+  });
+
+  it("disables pinning when the room already has three pins", () => {
+    render(
+      <MessageBubble
+        message={message}
+        conversation={conversation}
+        matrixSession={null}
+        canManagePins
+        canPinNewMessage={false}
+        onTogglePin={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+    expect(screen.getByRole("menuitem", { name: "Pin message" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("closes the action menu on Escape and keeps focus on its trigger", () => {
+    render(
+      <MessageBubble
+        message={message}
+        conversation={conversation}
+        matrixSession={null}
+        canManagePins
+        onTogglePin={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Message actions" });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Message actions" });
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Message actions" })).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
 });

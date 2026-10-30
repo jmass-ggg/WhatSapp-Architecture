@@ -43,7 +43,15 @@ export function messageFromMatrixEvent(
   const senderId = event.getSender();
   if (!senderId) return null;
 
-  const sentAt = event.getDate() ?? new Date(event.getTs() || Date.now());
+  const timestamp = event.getTs();
+  const sentAt = Number.isFinite(timestamp) &&
+    Math.abs(timestamp as number) <= 8.64e15
+    ? new Date(timestamp as number)
+    : event.getId()?.startsWith("~") &&
+        Number.isFinite(event.localTimestamp) &&
+        Math.abs(event.localTimestamp) <= 8.64e15
+      ? new Date(event.localTimestamp)
+      : undefined;
   const eventId = event.getId();
 
   const encrypted = wireType === "m.room.encrypted" || event.isEncrypted();
@@ -54,7 +62,7 @@ export function messageFromMatrixEvent(
     return {
       id: eventId ?? `encrypted-${senderId}-${event.getTs()}`,
       sender: senderId === ownUserId ? "me" : "them",
-      senderName: senderId,
+      senderName: undefined,
       text: failed
         ? "Unable to decrypt this encrypted message."
         : "Encrypted message · waiting for a room key.",
@@ -97,7 +105,7 @@ export function messageFromMatrixEvent(
   return {
     id: eventId ?? `local-${senderId}-${event.getTs()}-${body}`,
     sender: senderId === ownUserId ? "me" : "them",
-    senderName: senderId,
+    senderName: undefined,
     text: isFile ? "" : body,
     sentAt,
     delivery: senderId === ownUserId ? outgoingDelivery(event) : "sent",

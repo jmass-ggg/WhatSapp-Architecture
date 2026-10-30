@@ -111,6 +111,7 @@ export function createAuthenticatedMatrixClient(
       accessToken: session.access_token,
       userId: session.user_id,
       deviceId: session.device_id,
+      timelineSupport: true,
       // Keep sync responses in memory. Rust crypto uses its separately
       // namespaced IndexedDB store, keyed by the verified user and device.
       store: new sdk.MemoryStore(),

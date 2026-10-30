@@ -113,7 +113,39 @@ describe("Matrix room mapping", () => {
       id: "$message:localhost",
       text: "hello from Synapse",
       sender: "them",
+      senderName: "Other User",
     });
+  });
+
+  it("uses the group's sender display name rather than a Matrix ID", () => {
+    const event = new MatrixEvent({
+      event_id: "$group-message",
+      room_id: "!group:localhost",
+      sender: "@charlie:localhost",
+      type: "m.room.message",
+      origin_server_ts: 1_750_000_000_000,
+      content: { msgtype: "m.text", body: "Hello group" },
+    });
+    const members = [
+      { userId: "@self:localhost", membership: "join", name: "You", events: { member: { getContent: () => ({}) } } },
+      { userId: "@bob:localhost", membership: "join", name: "Bob Boyle", events: { member: { getContent: () => ({}) } } },
+      { userId: "@charlie:localhost", membership: "join", name: "Charlie Smith", events: { member: { getContent: () => ({}) } } },
+    ];
+    const room = {
+      roomId: "!group:localhost",
+      name: "Hiring group",
+      getMembers: () => members,
+      getLiveTimeline: () => ({ getEvents: () => [event] }),
+      getMyMembership: () => "join",
+      hasEncryptionStateEvent: () => true,
+      getUnreadNotificationCount: () => 0,
+      getLastActiveTimestamp: () => event.getTs(),
+      guessDMUserId: () => undefined,
+    } as unknown as Room;
+
+    const conversation = conversationFromMatrixRoom(room, "@self:localhost");
+    expect(conversation.messages[0].senderName).toBe("Charlie Smith");
+    expect(conversation.messages[0].senderName).not.toContain("@charlie");
   });
 
   it("shows encrypted invitations and keeps unique messages in timestamp order", () => {

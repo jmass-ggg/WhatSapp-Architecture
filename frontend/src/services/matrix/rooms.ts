@@ -12,6 +12,12 @@ function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string
 function timelineMessages(room: Room, ownUserId: string, recipientId?: string, deliveredIds?: ReadonlySet<string>): Message[] {
   const byEventId = new Map<string, Message>();
   const events = room.getLiveTimeline().getEvents();
+  const members = room.getMembers();
+  const otherMembers = members.filter(
+    (candidate) => candidate.userId !== ownUserId &&
+      (candidate.membership === "join" || candidate.membership === "invite"),
+  );
+  const membersById = new Map(members.map((member) => [member.userId, member]));
   const receipt = recipientId
     ? room.getReadReceiptForUserId?.(recipientId, true, ReceiptType.Read)
     : null;
@@ -25,6 +31,14 @@ function timelineMessages(room: Room, ownUserId: string, recipientId?: string, d
   for (const [index, event] of events.entries()) {
     const message = messageFromMatrixEvent(event, room.roomId, ownUserId);
     if (!message) continue;
+    const senderId = event.getSender();
+    const member = senderId ? membersById.get(senderId) : undefined;
+    const friendlyName = member?.name && !member.name.startsWith("@")
+      ? member.name
+      : undefined;
+    message.senderName = message.sender === "me"
+      ? "You"
+      : friendlyName || (otherMembers.length === 1 ? "Contact" : "A participant");
     if (message.sender === "me" && message.delivery === "sent" &&
       receiptIndex >= index &&
       !event.getId()?.startsWith("~")) {
@@ -44,7 +58,7 @@ function timelineMessages(room: Room, ownUserId: string, recipientId?: string, d
       : { eventId: message.replyTo.eventId, sender: "Original message", text: "Original message unavailable" };
   }
   return [...byEventId.values()]
-    .sort((left, right) => left.sentAt.getTime() - right.sentAt.getTime())
+    .sort((left, right) => (left.sentAt?.getTime() ?? 0) - (right.sentAt?.getTime() ?? 0))
     .slice(-100);
 }
 

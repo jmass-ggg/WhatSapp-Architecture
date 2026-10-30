@@ -42,6 +42,49 @@ describe("Matrix event conversion", () => {
     expect(messageFromMatrixEvent(outgoing, "!room:localhost", "@other:localhost")?.delivery).toBe("sent");
   });
 
+  it("uses the original event timestamp, provisional local echo time and safe unavailable fallback", () => {
+    const timestamped = event("m.room.message", {
+      msgtype: "m.text",
+      body: "Server time",
+    });
+    const serverTime = timestamped.getTs();
+    expect(messageFromMatrixEvent(timestamped, "!room:localhost", "@self:localhost")?.sentAt?.getTime())
+      .toBe(serverTime);
+
+    const epoch = new MatrixEvent({
+      event_id: "$epoch",
+      room_id: "!room:localhost",
+      sender: "@other:localhost",
+      type: "m.room.message",
+      origin_server_ts: 0,
+      content: { msgtype: "m.text", body: "At epoch" },
+    });
+    expect(messageFromMatrixEvent(epoch, "!room:localhost", "@self:localhost")?.sentAt?.getTime())
+      .toBe(0);
+
+    const pending = new MatrixEvent({
+      event_id: "~pending",
+      room_id: "!room:localhost",
+      sender: "@self:localhost",
+      type: "m.room.message",
+      content: { msgtype: "m.text", body: "Pending" },
+    });
+    pending.localTimestamp = 1_793_304_720_000;
+    expect(messageFromMatrixEvent(pending, "!room:localhost", "@self:localhost")?.sentAt?.getTime())
+      .toBe(1_793_304_720_000);
+
+    const malformed = new MatrixEvent({
+      event_id: "$bad-time",
+      room_id: "!room:localhost",
+      sender: "@other:localhost",
+      type: "m.room.message",
+      origin_server_ts: Number.NaN,
+      content: { msgtype: "m.text", body: "No valid time" },
+    });
+    expect(messageFromMatrixEvent(malformed, "!room:localhost", "@self:localhost")?.sentAt)
+      .toBeUndefined();
+  });
+
   it("keeps an encrypted outgoing local echo readable without exposing ciphertext", () => {
     const outgoing = new MatrixEvent({
       event_id: "~encrypted", room_id: "!room:localhost", sender: "@self:localhost",

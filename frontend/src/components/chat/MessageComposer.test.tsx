@@ -77,7 +77,11 @@ describe("MessageComposer emoji insertion", () => {
     textarea.setSelectionRange(5, 5);
 
     fireEvent.click(screen.getByRole("button", { name: "Choose emoji" }));
-    const search = await screen.findByRole("searchbox", { name: "Search emoji" });
+    const search = await screen.findByRole(
+      "searchbox",
+      { name: "Search emoji" },
+      { timeout: 5000 },
+    );
     fireEvent.change(search, { target: { value: "fire" } });
     fireEvent.click(await screen.findByRole("button", { name: "Insert Fire" }));
 

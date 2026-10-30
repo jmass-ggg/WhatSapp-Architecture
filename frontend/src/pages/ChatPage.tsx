@@ -9,7 +9,12 @@ import { ChatHeader } from "../components/chat/ChatHeader";
 import { MatrixConnectionStatus } from "../components/MatrixConnectionStatus";
 import { MatrixSecurityDialog } from "../components/MatrixSecurityDialog";
 import { MessageComposer } from "../components/chat/MessageComposer";
-import { MessageList } from "../components/chat/MessageList";
+import { MessageList, type MessageListHandle } from "../components/chat/MessageList";
+import {
+  PinnedMessageBanner,
+  pinnedSummaryFromMessage,
+  type PinnedMessageSummary,
+} from "../components/chat/PinnedMessageBanner";
 import { NewConversationDialog } from "../components/chat/NewConversationDialog";
 import { SearchInput } from "../components/SearchInput";
 import { Toast } from "../components/Toast";
@@ -19,6 +24,15 @@ import { useMatrixRooms } from "../hooks/useMatrixRooms";
 import { assertEncryptedSendReady, sendEncryptedTextMessage } from "../services/matrix/encryption";
 import { sendAttachment } from "../services/matrix/attachments";
 import { matrixUserIdForAppUserId } from "../services/matrix/identity";
+import {
+  loadMatrixMessage,
+  loadMatrixMessagePreview,
+} from "../services/matrix/messageNavigation";
+import {
+  canManagePinnedMessages,
+  getPinnedEventIds,
+  updatePinnedEvent,
+} from "../services/matrix/pinning";
 import type { Conversation, DirectoryUser, Message, UserConnection } from "../types";
 import { getDemoConversations } from "../utils/demoData";
 
@@ -35,6 +49,11 @@ function initialsFor(name: string): string {
     .map((part) => part[0])
     .join("")
     .toUpperCase();
+}
+
+function fallbackMessageSender(conversation: Conversation | null): string {
+  if (!conversation || conversation.isGroup) return "A participant";
+  return conversation.name.startsWith("@") ? "Contact" : conversation.name;
 }
 
 function conversationForContact(connection: UserConnection): Conversation {
@@ -78,6 +97,12 @@ export function ChatPage() {
   const [wallpaperIds, setWallpaperIds] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<ToastState | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const messageListRef = useRef<MessageListHandle>(null);
+  const [pinnedSummaryState, setPinnedSummaryState] = useState<{
+    roomId: string;
+    items: PinnedMessageSummary[];
+  } | null>(null);
+  const [activePinnedIndex, setActivePinnedIndex] = useState(0);
   const [attachmentProgress, setAttachmentProgress] = useState("");
   const [joiningRoom, setJoiningRoom] = useState(false);
   const [connections, setConnections] = useState<UserConnection[]>([]);
@@ -290,6 +315,17 @@ export function ChatPage() {
   const selectedRoom = mode === "live" && selectedId
     ? matrixContext.client?.getRoom(selectedId)
     : null;
+  const pinnedEventIds = getPinnedEventIds(selectedRoom);
+  const pinnedEventKey = pinnedEventIds.join("\u0000");
+  const pinnedEventIdSet = useMemo(
+    () => new Set(pinnedEventIds),
+    [pinnedEventKey, selectedId],
+  );
+  const ownMatrixUserId = matrixContext.client?.getUserId();
+  const canManagePins = canManagePinnedMessages(selectedRoom, ownMatrixUserId);
+  const visiblePinnedMessages = pinnedSummaryState && pinnedSummaryState.roomId === selectedId
+    ? pinnedSummaryState.items
+    : [];
   const isInvited = selectedRoom?.getMyMembership() === "invite";
   const isDirectConversation = Boolean(
     selectedConversation && !selectedConversation.isGroup,
@@ -302,7 +338,6 @@ export function ChatPage() {
           member.membership === "join",
       ),
   );
-  const ownMatrixUserId = matrixContext.client?.getUserId();
   const ownHasEncryptedSendPermission = Boolean(
     selectedRoom &&
       ownMatrixUserId &&
@@ -333,6 +368,86 @@ export function ChatPage() {
         selectedConversation.isGroup ||
         selectedConversation.connectionAllowed === true),
   );
+
+  useEffect(() => {
+    setActivePinnedIndex(0);
+    if (!selectedId || !selectedRoom || !matrixContext.client || pinnedEventIds.length === 0) {
+      setPinnedSummaryState(selectedId ? { roomId: selectedId, items: [] } : null);
+      return;
+    }
+
+    let cancelled = false;
+    const client = matrixContext.client;
+    const room = selectedRoom;
+    const fallbackName = fallbackMessageSender(selectedConversation);
+    void Promise.all(pinnedEventIds.map(async (eventId) => {
+      try {
+        const message = await loadMatrixMessagePreview(client, room, eventId, fallbackName);
+        return pinnedSummaryFromMessage(eventId, message);
+      } catch {
+        return pinnedSummaryFromMessage(eventId, null);
+      }
+    })).then((items) => {
+      if (!cancelled) setPinnedSummaryState({ roomId: selectedId, items });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    matrixContext.client,
+    pinnedEventKey,
+    pinnedEventIds.length,
+    selectedConversation?.messages,
+    selectedConversation?.name,
+    selectedId,
+    selectedRoom,
+  ]);
+
+  const loadMessageForJump = useCallback(async (eventId: string) => {
+    const client = matrixContext.client;
+    if (!client || !selectedRoom || !selectedConversation) {
+      throw new Error("Select a joined conversation before opening that message.");
+    }
+    return loadMatrixMessage(
+      client,
+      selectedRoom,
+      eventId,
+      fallbackMessageSender(selectedConversation),
+      true,
+    );
+  }, [
+    matrixContext.client,
+    selectedConversation?.isGroup,
+    selectedConversation?.name,
+    selectedRoom,
+  ]);
+
+  const showJumpError = useCallback((message: string) => {
+    notify(message, "error");
+  }, [notify]);
+
+  const togglePinnedMessage = useCallback(async (eventId: string) => {
+    const client = matrixContext.client;
+    const room = selectedRoom;
+    const userId = client?.getUserId();
+    if (!client || !room || !userId) {
+      notify("Sign in to manage pinned messages.", "error");
+      return;
+    }
+
+    const action = getPinnedEventIds(room).includes(eventId) ? "unpin" : "pin";
+    try {
+      await updatePinnedEvent(client, room, userId, eventId, action);
+      notify(action === "pin" ? "Message pinned." : "Message unpinned.", "success");
+    } catch (cause) {
+      notify(
+        cause instanceof Error && cause.message
+          ? cause.message
+          : "Pinned messages could not be updated. Check your room permissions and try again.",
+        "error",
+      );
+    }
+  }, [matrixContext.client, notify, selectedRoom]);
 
   useEffect(() => {
     if (conversationId && conversations.length > 0 && !selectedConversation && mode === "demo") {
@@ -807,6 +922,17 @@ export function ChatPage() {
             onContactInfo={() => setInfoOpen((open) => !open)}
           />
 
+          {visiblePinnedMessages.length > 0 && (
+            <PinnedMessageBanner
+              messages={visiblePinnedMessages}
+              activeIndex={activePinnedIndex}
+              onSelectIndex={setActivePinnedIndex}
+              onJump={(eventId) => void messageListRef.current?.jumpTo(eventId)}
+              canUnpin={canManagePins}
+              onUnpin={(eventId) => void togglePinnedMessage(eventId)}
+            />
+          )}
+
           {mode === "demo" && (
             <div className="mode-banner" role="status">
               <span className="demo-label">DEMO MODE</span>
@@ -870,12 +996,18 @@ export function ChatPage() {
             )}
 
           <MessageList
+            ref={messageListRef}
             conversation={selectedConversation}
             matrixSession={matrixSession}
             searchTerm={messageSearch}
             searchOpen={searchOpen}
             conversationRouteId={conversationId}
             onReply={setReplyTo}
+            pinnedEventIds={pinnedEventIdSet}
+            canManagePins={canManagePins}
+            onTogglePin={togglePinnedMessage}
+            onLoadMessage={loadMessageForJump}
+            onJumpError={showJumpError}
           />
 
           {selectedConversation && mode === "live" &&
