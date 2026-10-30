@@ -6,8 +6,11 @@ import {
   X,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -17,6 +20,10 @@ import {
 import type { MatrixClient } from "matrix-js-sdk";
 import type { Message } from "../../types";
 import { validateAttachment } from "../../services/matrix/attachments";
+
+const EmojiPicker = lazy(() =>
+  import("./EmojiPicker").then((module) => ({ default: module.EmojiPicker })),
+);
 
 interface MessageComposerProps {
   disabled?: boolean;
@@ -32,8 +39,6 @@ interface MessageComposerProps {
   onCancelReply?: () => void;
   uploadStatus?: string;
 }
-
-const emojis = ["😊", "✨", "❤️", "🙌", "😂", "👍", "🎉", "☀️"];
 
 export function MessageComposer({
   disabled = false,
@@ -56,12 +61,24 @@ export function MessageComposer({
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const emojiAnchorRef = useRef<HTMLDivElement>(null);
+  const pendingEmojiSelection = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const isBusy = busy || sending;
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const typingActive = useRef(false);
   const typingTarget = useRef<{ client: MatrixClient; roomId: string } | null>(null);
+  const closeEmojiPicker = useCallback(() => setEmojiOpen(false), []);
+
+  useLayoutEffect(() => {
+    const input = textareaRef.current;
+    const selection = pendingEmojiSelection.current;
+    if (!input || selection === null) return;
+    input.setSelectionRange(selection, selection);
+    pendingEmojiSelection.current = null;
+  }, [value]);
+
   useEffect(() => {
     if (!file || !file.type.startsWith("image/")) { setFilePreview(null); return; }
     const url = URL.createObjectURL(file);
@@ -156,12 +173,14 @@ export function MessageComposer({
     });
   }
 
-  function appendEmoji(emoji: string) {
-    const next = `${value}${emoji}`;
+  function insertEmoji(emoji: string) {
+    const input = textareaRef.current;
+    const start = input?.selectionStart ?? value.length;
+    const end = input?.selectionEnd ?? start;
+    const next = `${value.slice(0, start)}${emoji}${value.slice(end)}`;
+    pendingEmojiSelection.current = start + emoji.length;
     setValue(next);
     updateTyping(next);
-    setEmojiOpen(false);
-    textareaRef.current?.focus();
   }
 
   return (
@@ -187,33 +206,31 @@ export function MessageComposer({
       )}
       <form className="message-composer" onSubmit={handleSubmit}>
         <div className="composer-tools">
-          <div className="emoji-anchor">
+          <div className="emoji-anchor" ref={emojiAnchorRef}>
             <button
               className={`composer-tool${emojiOpen ? " is-active" : ""}`}
               type="button"
               aria-label="Choose emoji"
+              aria-haspopup="dialog"
+              aria-controls="emoji-picker-dialog"
               aria-expanded={emojiOpen}
               onClick={() => setEmojiOpen((open) => !open)}
               disabled={disabled || isBusy}
             >
               <Smile size={20} />
             </button>
-            {emojiOpen && (
-              <div className="emoji-picker" role="group" aria-label="Choose an emoji">
-                {emojis.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    aria-label={`Insert ${emoji}`}
-                    disabled={disabled || isBusy}
-                    onClick={() => appendEmoji(emoji)}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
+          {emojiOpen && (
+            <Suspense fallback={null}>
+              <EmojiPicker
+                open
+                disabled={disabled || isBusy}
+                anchorRef={emojiAnchorRef}
+                onClose={closeEmojiPicker}
+                onSelect={insertEmoji}
+              />
+            </Suspense>
+          )}
           {!attachmentsDisabled && (
             <>
               <button

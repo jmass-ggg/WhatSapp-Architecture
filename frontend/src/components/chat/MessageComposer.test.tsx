@@ -67,3 +67,27 @@ describe("MessageComposer typing", () => {
     expect(sendTyping).not.toHaveBeenCalled();
   });
 });
+
+describe("MessageComposer emoji insertion", () => {
+  it("inserts multiple emoji at the caret, preserves the draft, and keeps the picker open", async () => {
+    const { input } = setup();
+    const textarea = input as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "hello world" } });
+    textarea.focus();
+    textarea.setSelectionRange(5, 5);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose emoji" }));
+    const search = await screen.findByRole("searchbox", { name: "Search emoji" });
+    fireEvent.change(search, { target: { value: "fire" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Insert Fire" }));
+
+    expect(textarea.value).toBe("hello🔥 world");
+    expect(textarea.selectionStart).toBe(7);
+    expect(screen.getByRole("dialog", { name: "Emoji picker" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert Fire" }));
+    expect(textarea.value).toBe("hello🔥🔥 world");
+    expect(textarea.selectionStart).toBe(9);
+    expect(screen.getByRole("dialog", { name: "Emoji picker" })).not.toBeNull();
+  });
+});
