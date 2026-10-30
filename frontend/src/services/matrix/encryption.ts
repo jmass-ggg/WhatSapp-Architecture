@@ -3,11 +3,15 @@ import { EventType, MsgType, Preset, Visibility } from "matrix-js-sdk";
 import type { ISendEventResponse } from "matrix-js-sdk";
 
 export const MATRIX_ROOM_ENCRYPTION_ALGORITHM = "m.megolm.v1.aes-sha2";
+export const MATRIX_GROUP_MARKER_TYPE = "org.recruitable.chat.group";
+export const MATRIX_DIRECT_MARKER_TYPE = "org.recruitable.chat.direct";
+export const MATRIX_CONVERSATION_MARKER_VERSION = 1;
 
 export interface CreateEncryptedRoomOptions {
   invitees: string[];
   name?: string;
   isDirect?: boolean;
+  isGroup?: boolean;
 }
 
 export async function createEncryptedRoom(
@@ -26,19 +30,50 @@ export async function createEncryptedRoom(
   if (options.invitees.length === 0) {
     throw new Error("An encrypted room must have at least one invitee.");
   }
+  if (new Set(options.invitees).size !== options.invitees.length) {
+    throw new Error("A participant can only be invited to a room once.");
+  }
+  const ownUserId = client.getUserId();
+  if (ownUserId && options.invitees.includes(ownUserId)) {
+    throw new Error("You cannot invite yourself to a conversation.");
+  }
+  const name = options.name?.trim();
+  if (options.isGroup && !name) {
+    throw new Error("Enter a name for the group.");
+  }
+  if (options.isGroup && options.invitees.length < 2) {
+    throw new Error("Select at least two accepted contacts for a group.");
+  }
+  if (options.isGroup && options.isDirect === true) {
+    throw new Error("A group conversation cannot be marked as a direct chat.");
+  }
+  const isDirect = options.isDirect ?? options.invitees.length === 1;
 
   const result = await client.createRoom({
     visibility: Visibility.Private,
     preset: Preset.PrivateChat,
-    is_direct: options.isDirect ?? options.invitees.length === 1,
+    is_direct: isDirect,
     invite: [...new Set(options.invitees)],
-    ...(options.name ? { name: options.name } : {}),
+    ...(name ? { name } : {}),
     initial_state: [
       {
         type: "m.room.encryption",
         state_key: "",
         content: { algorithm: MATRIX_ROOM_ENCRYPTION_ALGORITHM },
       },
+      ...(options.isGroup
+        ? [{
+            type: MATRIX_GROUP_MARKER_TYPE,
+            state_key: "",
+            content: { version: MATRIX_CONVERSATION_MARKER_VERSION },
+          }]
+        : isDirect
+          ? [{
+              type: MATRIX_DIRECT_MARKER_TYPE,
+              state_key: "",
+              content: { version: MATRIX_CONVERSATION_MARKER_VERSION },
+            }]
+          : []),
     ],
   });
 
@@ -55,6 +90,56 @@ export async function createEncryptedRoom(
 
   await waitForSdkEncryptionState(client, result.room_id);
   return result.room_id;
+}
+
+export async function acceptEncryptedGroupInvitation(
+  client: MatrixClient,
+  roomId: string,
+): Promise<void> {
+  const room = client.getRoom(roomId);
+  if (!room || room.getMyMembership() !== "invite") {
+    throw new Error("This group invitation is no longer available.");
+  }
+  if (!room.hasEncryptionStateEvent()) {
+    throw new Error(
+      "This group invitation does not contain confirmed encryption state, so it was not accepted.",
+    );
+  }
+
+  const joinedRoom = await client.joinRoom(roomId);
+  const activeRoom = client.getRoom(roomId) ?? joinedRoom;
+  if (activeRoom.getMyMembership() !== "join") {
+    throw new Error("The group invitation was accepted, but the room did not finish joining.");
+  }
+  if (!activeRoom.hasEncryptionStateEvent()) {
+    throw new Error("You joined the group, but its encrypted-room state is unavailable.");
+  }
+
+  const crypto = client.getCrypto();
+  let encryptionReady = false;
+  try {
+    encryptionReady = Boolean(
+      crypto && (await crypto.isEncryptionEnabledInRoom(roomId)),
+    );
+  } catch {
+    encryptionReady = false;
+  }
+  if (!encryptionReady) {
+    throw new Error(
+      "You joined the group, but encryption is not ready on this device. Messages remain blocked until room keys are available.",
+    );
+  }
+}
+
+export async function declineGroupInvitation(
+  client: MatrixClient,
+  roomId: string,
+): Promise<void> {
+  const room = client.getRoom(roomId);
+  if (!room || room.getMyMembership() !== "invite") {
+    throw new Error("This group invitation is no longer available.");
+  }
+  await client.leave(roomId);
 }
 
 export async function sendEncryptedTextMessage(

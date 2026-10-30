@@ -57,6 +57,18 @@ function groupByDay(messages: Message[]) {
   return groups;
 }
 
+function groupTypingLabel(names: string[]): string {
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  if (names.length > 2) {
+    const additional = names.length - 2;
+    return `${names[0]}, ${names[1]} and ${additional} ${
+      additional === 1 ? "other" : "others"
+    } are typing…`;
+  }
+  return "Someone is typing…";
+}
+
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
   conversation,
   matrixSession,
@@ -236,7 +248,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       {conversation.isTyping && !term && (
         <div className="typing-row">
           <span className="typing-dots"><i /><i /><i /></span>
-          <span>{conversation.name} is typing…</span>
+          <span>
+            {conversation.isGroup
+              ? groupTypingLabel(conversation.typingNames ?? [])
+              : `${conversation.name} is typing…`}
+          </span>
         </div>
       )}
     </div>

@@ -1,6 +1,11 @@
 import { ReceiptType, type MatrixEvent, type Room } from "matrix-js-sdk";
 
 import type { Conversation, Message } from "../../types";
+import {
+  MATRIX_CONVERSATION_MARKER_VERSION,
+  MATRIX_DIRECT_MARKER_TYPE,
+  MATRIX_GROUP_MARKER_TYPE,
+} from "./encryption";
 import { messageFromMatrixEvent } from "./events";
 
 function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string | null {
@@ -9,7 +14,48 @@ function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string
   return typeof avatar === "string" ? avatar : null;
 }
 
-function timelineMessages(room: Room, ownUserId: string, recipientId?: string, deliveredIds?: ReadonlySet<string>): Message[] {
+function hasConversationMarker(room: Room, eventType: string): boolean {
+  const content = room.currentState?.getStateEvents(eventType, "")?.getContent();
+  return (
+    typeof content?.version === "number" &&
+    Number.isInteger(content.version) &&
+    content.version >= MATRIX_CONVERSATION_MARKER_VERSION
+  );
+}
+
+function memberDisplayName(
+  member: ReturnType<Room["getMembers"]>[number] | null | undefined,
+): string {
+  if (!member) return "Group member";
+  const content = member.events.member?.getContent();
+  const candidates = [
+    content?.displayname,
+    member.rawDisplayName,
+    member.name,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const name = candidate.trim();
+    if (
+      name &&
+      name !== member.userId &&
+      !name.includes(member.userId)
+    ) {
+      return name;
+    }
+  }
+  if (!member.userId.startsWith("@")) return "Group member";
+  const localpart = member.userId.slice(1).split(":", 1)[0];
+  return localpart || "Group member";
+}
+
+function timelineMessages(
+  room: Room,
+  ownUserId: string,
+  isGroup: boolean,
+  recipientId?: string,
+  deliveredIds?: ReadonlySet<string>,
+): Message[] {
   const byEventId = new Map<string, Message>();
   const events = room.getLiveTimeline().getEvents();
   const members = room.getMembers();
@@ -18,7 +64,7 @@ function timelineMessages(room: Room, ownUserId: string, recipientId?: string, d
       (candidate.membership === "join" || candidate.membership === "invite"),
   );
   const membersById = new Map(members.map((member) => [member.userId, member]));
-  const receipt = recipientId
+  const receipt = !isGroup && recipientId
     ? room.getReadReceiptForUserId?.(recipientId, true, ReceiptType.Read)
     : null;
   const receiptIndex = receipt
@@ -31,20 +77,27 @@ function timelineMessages(room: Room, ownUserId: string, recipientId?: string, d
   for (const [index, event] of events.entries()) {
     const message = messageFromMatrixEvent(event, room.roomId, ownUserId);
     if (!message) continue;
-    const senderId = event.getSender();
-    const member = senderId ? membersById.get(senderId) : undefined;
-    const friendlyName = member?.name && !member.name.startsWith("@")
-      ? member.name
-      : undefined;
-    message.senderName = message.sender === "me"
-      ? "You"
-      : friendlyName || (otherMembers.length === 1 ? "Contact" : "A participant");
-    if (message.sender === "me" && message.delivery === "sent" &&
+    if (isGroup && message.sender === "them") {
+      const senderId = message.matrix?.senderId ?? event.getSender() ?? "";
+      message.senderName = memberDisplayName(
+        room.getMember?.(senderId) ?? membersById.get(senderId),
+      );
+    } else if (!isGroup) {
+      const senderId = event.getSender();
+      const member = senderId ? membersById.get(senderId) : undefined;
+      const friendlyName = member?.name && !member.name.startsWith("@")
+        ? member.name
+        : undefined;
+      message.senderName = message.sender === "me"
+        ? "You"
+        : friendlyName || (otherMembers.length === 1 ? "Contact" : "A participant");
+    }
+    if (!isGroup && message.sender === "me" && message.delivery === "sent" &&
       receiptIndex >= index &&
       !event.getId()?.startsWith("~")) {
       message.delivery = "read";
       if (readAt) message.readAt = readAt;
-    } else if (message.sender === "me" && message.delivery === "sent" &&
+    } else if (!isGroup && message.sender === "me" && message.delivery === "sent" &&
       event.getId() && deliveredIds?.has(event.getId()!)) {
       message.delivery = "delivered";
     }
@@ -82,25 +135,47 @@ export function conversationFromMatrixRoom(
         member.userId !== ownUserId &&
         (member.membership === "join" || member.membership === "invite"),
     );
+  const hasGroupMarker = hasConversationMarker(room, MATRIX_GROUP_MARKER_TYPE);
+  const hasDirectMarker = hasConversationMarker(room, MATRIX_DIRECT_MARKER_TYPE);
+  const isGroup = hasGroupMarker || (!hasDirectMarker && members.length > 1);
   const name =
     room.name?.trim() ||
-    members[0]?.name ||
+    (isGroup ? "Unnamed group" : members[0]?.name) ||
     room.guessDMUserId() ||
     "New conversation";
-  const messages = timelineMessages(room, ownUserId,
-    members.length === 1 && members[0].membership === "join"
-      ? members[0].userId : undefined, deliveredIds);
+  const messages = timelineMessages(
+    room,
+    ownUserId,
+    isGroup,
+    !isGroup && members.length === 1 && members[0].membership === "join"
+      ? members[0].userId
+      : undefined,
+    deliveredIds,
+  );
   const latest = messages.at(-1);
   const isEncrypted = room.hasEncryptionStateEvent();
-  const typing = members.some((member) => member.typing);
+  const typingNames = members
+    .filter((member) => member.membership === "join" && member.typing)
+    .map(memberDisplayName);
+  const typing = typingNames.length > 0;
   const lastEvent = latestVisibleEvent(room);
   const lastActivity = lastEvent?.getTs() ?? room.getLastActiveTimestamp();
+  const latestText = latest?.text || latest?.attachment?.name;
+  const lastMessage = latestText
+    ? isGroup
+      ? `${latest?.sender === "me" ? "You" : latest?.senderName || "Group member"}: ${latestText}`
+      : latestText
+    : isEncrypted && lastEvent
+      ? "Encrypted message"
+      : isGroup
+        ? "No messages yet"
+        : "Start a conversation";
 
   return {
     id: room.roomId,
     roomId: room.roomId,
     name,
-    matrixUserId: members[0]?.userId,
+    matrixUserId: isGroup ? undefined : members[0]?.userId,
     initials: name
       .trim()
       .split(/\s+/)
@@ -108,13 +183,16 @@ export function conversationFromMatrixRoom(
       .map((part) => part[0])
       .join("")
       .toUpperCase() || "??",
-    avatarUrl: members[0] ? memberAvatarUrl(members[0]) : null,
+    avatarUrl: isGroup
+      ? room.getMxcAvatarUrl?.() ?? null
+      : members[0]
+        ? memberAvatarUrl(members[0])
+        : null,
     accent: Math.abs(room.roomId.length * 13) % 6,
     isTyping: typing,
-    lastMessage:
-      latest?.text ||
-      latest?.attachment?.name ||
-      (isEncrypted && lastEvent ? "Encrypted message" : "Start a conversation"),
+    typingNames,
+    lastMessage,
+    lastMessageDelivery: latest?.sender === "me" ? latest.delivery : undefined,
     updatedAt:
       latest?.sentAt ??
       new Date(Number.isFinite(lastActivity) && Math.abs(lastActivity) <= 8.64e15
@@ -122,12 +200,12 @@ export function conversationFromMatrixRoom(
         : 0),
     unreadCount: room.getUnreadNotificationCount() ?? 0,
     messages,
-    bio:
-      members.length > 1
-        ? `${members.length + 1} people in this conversation`
-        : "Matrix conversation",
+    bio: isGroup
+      ? `${members.length + 1} members in this group`
+      : "Matrix conversation",
     isDemo: false,
-    isGroup: members.length > 1,
+    isGroup,
+    isInvited: room.getMyMembership?.() === "invite",
     isEncrypted,
   };
 }
@@ -140,6 +218,5 @@ export function conversationsFromMatrixClient(
   return rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
     .map((room) => conversationFromMatrixRoom(room, ownUserId, deliveredIds))
-    .filter((conversation) => !conversation.isGroup)
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }

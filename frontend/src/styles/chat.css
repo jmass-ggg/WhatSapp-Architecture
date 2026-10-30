@@ -379,13 +379,41 @@
   gap: 7px;
 }
 
+.conversation-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.conversation-group-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: #0284c7;
+}
+
 .conversation-name {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   color: #334155;
   font-size: 12px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-invite-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 99px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 8px;
+  font-weight: 700;
 }
 
 .conversation-time {
@@ -748,6 +776,11 @@
   color: #475569;
   font-size: 9px;
   text-align: center;
+}
+
+.invitation-banner {
+  justify-content: space-between;
+  text-align: left;
 }
 
 .demo-label {
@@ -2510,6 +2543,61 @@
   background: #f5f8f6;
 }
 
+.conversation-creation-options {
+  display: flex;
+  gap: 6px;
+  margin: 0 20px 12px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #f3f7f5;
+}
+
+.conversation-creation-options button {
+  min-height: 32px;
+  flex: 1;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.conversation-creation-options button.is-active {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(51, 65, 85, 0.1);
+  color: #075985;
+}
+
+.group-name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 20px 10px;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.group-name-field input {
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid #e0f2fe;
+  border-radius: 9px;
+  outline: none;
+  background: #f8faf8;
+  color: #334155;
+  font: inherit;
+  font-weight: 450;
+}
+
+.group-name-field input:focus {
+  border-color: #7dd3fc;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.08);
+}
+
 .new-chat-search {
   display: flex;
   min-height: 42px;
@@ -2618,6 +2706,74 @@
   font-size: 10px;
   line-height: 1.5;
   text-align: center;
+}
+
+.group-contact-results {
+  min-height: 115px;
+}
+
+.group-contact-option {
+  cursor: pointer;
+}
+
+.group-contact-option.is-selected {
+  background: #f0f9ff;
+}
+
+.group-contact-option input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  accent-color: #0284c7;
+}
+
+.group-create-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px 14px;
+  border-top: 1px solid #f1f5f4;
+}
+
+.group-create-footer > span {
+  color: #64748b;
+  font-size: 9px;
+}
+
+.group-create-footer .primary-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 10px;
+}
+
+.group-create-progress {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 20px 12px;
+  color: #0369a1;
+  font-size: 9px;
+}
+
+.invitation-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.invitation-actions .primary-button,
+.invitation-actions .secondary-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 9px;
 }
 
 .toast {
@@ -2843,6 +2999,13 @@
     overflow: hidden;
     font-size: 8px;
     white-space: nowrap;
+  }
+
+  .mode-banner.invitation-banner {
+    min-height: 44px;
+    align-items: center;
+    overflow: visible;
+    white-space: normal;
   }
 
   .messages-scroll {

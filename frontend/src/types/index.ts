@@ -117,13 +117,16 @@ export interface Conversation {
   accent: number;
   isOnline?: boolean;
   isTyping?: boolean;
+  typingNames?: string[];
   lastMessage: string;
+  lastMessageDelivery?: Message["delivery"];
   updatedAt: Date;
   unreadCount: number;
   messages: Message[];
   bio?: string;
   isDemo?: boolean;
   isGroup?: boolean;
+  isInvited?: boolean;
   isEncrypted?: boolean;
   roomId?: string;
   contactUserId?: string;

@@ -1,6 +1,7 @@
 import { EventStatus, MatrixEvent, ReceiptType, type Room } from "matrix-js-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import { MATRIX_DIRECT_MARKER_TYPE, MATRIX_GROUP_MARKER_TYPE } from "./encryption";
 import { conversationFromMatrixRoom, conversationsFromMatrixClient } from "./rooms";
 
 describe("Matrix room mapping", () => {
@@ -188,7 +189,7 @@ describe("Matrix room mapping", () => {
     expect(conversation.updatedAt.getTime()).toBe(0);
   });
 
-  it("keeps group rooms out of the active conversation list", () => {
+  it("shows group rooms and preserves marker-based classification after membership changes", () => {
     const otherMember = {
       userId: "@other:localhost",
       membership: "join",
@@ -201,29 +202,162 @@ describe("Matrix room mapping", () => {
       userId: "@third:localhost",
       name: "Third User",
     };
-    const makeRoom = (roomId: string, members: typeof otherMember[]) =>
+    const marker = { getContent: () => ({ version: 1 }) };
+    const makeRoom = (
+      roomId: string,
+      members: typeof otherMember[],
+      markerType?: string,
+      membership: "join" | "invite" = "join",
+      name = "",
+    ) =>
       ({
         roomId,
-        name: "",
+        name,
+        currentState: {
+          getStateEvents: (type: string) => type === markerType ? marker : null,
+        },
         getMembers: () => members,
+        getMember: (userId: string) =>
+          members.find((member) => member.userId === userId) ?? null,
         getLiveTimeline: () => ({ getEvents: () => [] }),
-        getMyMembership: () => "join",
+        getMyMembership: () => membership,
         hasEncryptionStateEvent: () => true,
         getUnreadNotificationCount: () => 0,
         getLastActiveTimestamp: () => 0,
         guessDMUserId: () => members[0]?.userId,
+        getMxcAvatarUrl: () => null,
       }) as unknown as Room;
 
     const conversations = conversationsFromMatrixClient(
       [
-        makeRoom("!direct:localhost", [otherMember]),
-        makeRoom("!group:localhost", [otherMember, anotherMember]),
+        makeRoom("!direct:localhost", [otherMember], MATRIX_DIRECT_MARKER_TYPE),
+        makeRoom("!group:localhost", [otherMember], MATRIX_GROUP_MARKER_TYPE, "join", "Development Team"),
+        makeRoom("!empty-group:localhost", [], MATRIX_GROUP_MARKER_TYPE, "invite", "New Team"),
+        makeRoom("!legacy-group:localhost", [otherMember, anotherMember]),
       ],
       "@self:localhost",
     );
 
-    expect(conversations.map((conversation) => conversation.id)).toEqual([
-      "!direct:localhost",
-    ]);
+    expect(conversations.map((conversation) => conversation.id)).toContain("!direct:localhost");
+    expect(conversations.map((conversation) => conversation.id)).toContain("!group:localhost");
+    expect(conversations.map((conversation) => conversation.id)).toContain("!empty-group:localhost");
+    expect(conversations.map((conversation) => conversation.id)).toContain("!legacy-group:localhost");
+    expect(conversations.find((conversation) => conversation.id === "!direct:localhost")?.isGroup).toBe(false);
+    expect(conversations.find((conversation) => conversation.id === "!group:localhost")).toMatchObject({
+      name: "Development Team",
+      isGroup: true,
+      isInvited: false,
+      matrixUserId: undefined,
+    });
+    expect(conversations.find((conversation) => conversation.id === "!empty-group:localhost")).toMatchObject({
+      name: "New Team",
+      isGroup: true,
+      isInvited: true,
+      lastMessage: "No messages yet",
+    });
+  });
+
+  it("shows friendly group sender names and typing activity without group read or delivery claims", () => {
+    const bob = {
+      userId: "@bob:localhost",
+      membership: "join",
+      name: "Bob (@bob:localhost)",
+      rawDisplayName: "Bob",
+      typing: true,
+      events: { member: { getContent: () => ({ displayname: "Bob" }) } },
+    };
+    const alice = {
+      ...bob,
+      userId: "@alice:localhost",
+      name: "Alice",
+      rawDisplayName: "Alice",
+      events: { member: { getContent: () => ({ displayname: "Alice" }) } },
+    };
+    const ownMember = {
+      ...bob,
+      userId: "@self:localhost",
+      name: "@self:localhost",
+      rawDisplayName: "@self:localhost",
+    };
+    const unnamedMember = {
+      userId: "@service:localhost",
+      membership: "join",
+      name: "@service:localhost",
+      rawDisplayName: "@service:localhost",
+      typing: false,
+      events: { member: { getContent: () => ({}) } },
+    };
+    const sent = new MatrixEvent({
+      event_id: "$sent:localhost",
+      room_id: "!group:localhost",
+      sender: "@self:localhost",
+      type: "m.room.message",
+      origin_server_ts: 1000,
+      content: { msgtype: "m.text", body: "hello" },
+    });
+    const received = new MatrixEvent({
+      event_id: "$received:localhost",
+      room_id: "!group:localhost",
+      sender: "@bob:localhost",
+      type: "m.room.message",
+      origin_server_ts: 2000,
+      content: { msgtype: "m.text", body: "hi" },
+    });
+    received.makeEncrypted(
+      "m.room.encrypted",
+      { algorithm: "m.megolm.v1.aes-sha2", ciphertext: "ciphertext" },
+      "curve25519:BOB",
+      "ed25519:BOB",
+    );
+    const unnamedMessage = new MatrixEvent({
+      event_id: "$unnamed:localhost",
+      room_id: "!group:localhost",
+      sender: "@service:localhost",
+      type: "m.room.message",
+      origin_server_ts: 3000,
+      content: { msgtype: "m.text", body: "status" },
+    });
+    const getReadReceiptForUserId = vi.fn(() => ({
+      eventId: "$sent:localhost",
+      data: { ts: 3000 },
+    }));
+    const room = {
+      roomId: "!group:localhost",
+      name: "Development Team",
+      currentState: {
+        getStateEvents: (type: string) =>
+          type === MATRIX_GROUP_MARKER_TYPE
+            ? { getContent: () => ({ version: 1 }) }
+            : null,
+      },
+      getMembers: () => [alice, bob, ownMember, unnamedMember],
+      getMember: (userId: string) =>
+        [alice, bob, ownMember, unnamedMember].find((member) => member.userId === userId) ?? null,
+      getLiveTimeline: () => ({ getEvents: () => [sent, received, unnamedMessage] }),
+      getMyMembership: () => "join",
+      getReadReceiptForUserId,
+      hasEncryptionStateEvent: () => true,
+      getUnreadNotificationCount: () => 0,
+      getLastActiveTimestamp: () => 0,
+      getMxcAvatarUrl: () => null,
+    } as unknown as Room;
+
+    const conversation = conversationFromMatrixRoom(
+      room,
+      "@self:localhost",
+      new Set(["$sent:localhost"]),
+    );
+
+    expect(conversation.isGroup).toBe(true);
+    expect(conversation.isTyping).toBe(true);
+    expect(conversation.typingNames).toEqual(["Alice", "Bob"]);
+    expect(conversation.messages[1].senderName).toBe("Bob");
+    expect(conversation.messages[1].text).toBe("hi");
+    expect(conversation.messages[1].matrix?.encryptionStatus).toBe("decrypted");
+    expect(conversation.messages[2].senderName).toBe("service");
+    expect(conversation.messages[2].senderName).not.toContain("@service:localhost");
+    expect(conversation.messages[0].delivery).toBe("sent");
+    expect(conversation.messages[0].readAt).toBeUndefined();
+    expect(getReadReceiptForUserId).not.toHaveBeenCalled();
   });
 });

@@ -21,7 +21,12 @@ import { Toast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
 import { useMatrixContext } from "../context/MatrixContext";
 import { useMatrixRooms } from "../hooks/useMatrixRooms";
-import { assertEncryptedSendReady, sendEncryptedTextMessage } from "../services/matrix/encryption";
+import {
+  acceptEncryptedGroupInvitation,
+  assertEncryptedSendReady,
+  declineGroupInvitation,
+  sendEncryptedTextMessage,
+} from "../services/matrix/encryption";
 import { sendAttachment } from "../services/matrix/attachments";
 import { matrixUserIdForAppUserId } from "../services/matrix/identity";
 import {
@@ -112,6 +117,7 @@ export function ChatPage() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const [startingContactId, setStartingContactId] = useState<string | null>(null);
+  const groupCreationPromise = useRef<Promise<void> | null>(null);
   const provisionedConnectionIds = useRef(new Set<string>());
   const lastReadReceipt = useRef("");
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
@@ -517,6 +523,74 @@ export function ChatPage() {
     [api, refreshConnections],
   );
 
+  const createGroup = useCallback(
+    async (name: string, contactUserIds: string[]) => {
+      if (groupCreationPromise.current) return groupCreationPromise.current;
+      const creation = (async () => {
+        if (mode !== "live" || !matrixContext.client) {
+          throw new Error("Sign in to create an encrypted group.");
+        }
+        if (!matrix.initialSyncComplete) {
+          throw new Error("Wait for Matrix to finish syncing before creating a group.");
+        }
+        const normalizedName = name.trim();
+        if (!normalizedName) throw new Error("Enter a name for the group.");
+        if (normalizedName.length > 80) {
+          throw new Error("Group names must be 80 characters or fewer.");
+        }
+        const uniqueContactIds = [...new Set(contactUserIds)];
+        if (
+          uniqueContactIds.length !== contactUserIds.length ||
+          uniqueContactIds.length < 2
+        ) {
+          throw new Error("Select at least two different accepted contacts.");
+        }
+        if (!user || uniqueContactIds.includes(user.id)) {
+          throw new Error("The current user cannot be selected as a group participant.");
+        }
+
+        const acceptedConnections =
+          await api.request<UserConnection[]>("/connections");
+        const acceptedContactIds = new Set(
+          acceptedConnections
+            .filter((connection) => connection.status === "accepted")
+            .map((connection) => connection.other_user.id),
+        );
+        if (uniqueContactIds.some((id) => !acceptedContactIds.has(id))) {
+          throw new Error("Groups can only include your currently accepted contacts.");
+        }
+
+        const matrixUserIds = uniqueContactIds.map(matrixUserIdForAppUserId);
+        const ownMatrixUserId = matrixContext.client.getUserId();
+        if (!ownMatrixUserId || matrixUserIds.includes(ownMatrixUserId)) {
+          throw new Error("The current user cannot be selected as a group participant.");
+        }
+        const roomId = await matrix.createGroup(normalizedName, matrixUserIds);
+        setNewChatOpen(false);
+        navigate(`/chat/${encodeURIComponent(roomId)}`);
+        notify(`Encrypted group "${normalizedName}" created. Invitations were sent.`, "success");
+      })();
+      groupCreationPromise.current = creation;
+      try {
+        await creation;
+      } finally {
+        if (groupCreationPromise.current === creation) {
+          groupCreationPromise.current = null;
+        }
+      }
+    },
+    [
+      api,
+      matrix.createGroup,
+      matrix.initialSyncComplete,
+      matrixContext.client,
+      mode,
+      navigate,
+      notify,
+      user,
+    ],
+  );
+
   const startAcceptedConversation = useCallback(
     async (conversation: Conversation) => {
       const contactUserId = conversation.contactUserId;
@@ -646,7 +720,9 @@ export function ChatPage() {
     if (!matrixContext.client || !selectedId || !selectedConversation) return;
     setJoiningRoom(true);
     try {
-      if (!selectedConversation.isGroup) {
+      if (selectedConversation.isGroup) {
+        await acceptEncryptedGroupInvitation(matrixContext.client, selectedId);
+      } else {
         if (
           !selectedConversation.connectionAllowed ||
           !selectedConversation.connectionUserId
@@ -654,14 +730,28 @@ export function ChatPage() {
           throw new Error("This direct room is unavailable until the connection is accepted.");
         }
         await verifyAcceptedContact(selectedConversation.connectionUserId);
+        await matrixContext.client.joinRoom(selectedId);
       }
-      await matrixContext.client.joinRoom(selectedId);
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : "Could not join the conversation.", "error");
     } finally {
       setJoiningRoom(false);
     }
   }, [matrixContext.client, notify, selectedConversation, selectedId, verifyAcceptedContact]);
+
+  const declineInvitation = useCallback(async () => {
+    if (!matrixContext.client || !selectedId || !selectedConversation?.isGroup) return;
+    setJoiningRoom(true);
+    try {
+      await declineGroupInvitation(matrixContext.client, selectedId);
+      notify(`Invitation to "${selectedConversation.name}" declined.`, "success");
+      navigate("/chat");
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : "Could not decline the group invitation.", "error");
+    } finally {
+      setJoiningRoom(false);
+    }
+  }, [matrixContext.client, navigate, notify, selectedConversation, selectedId]);
 
   const sendMessage = useCallback(
     async (text: string, file?: File) => {
@@ -954,14 +1044,25 @@ export function ChatPage() {
           )}
 
           {isInvited && (
-            <div className="mode-banner" role="status">
+            <div className={`mode-banner${selectedConversation?.isGroup ? " invitation-banner" : ""}`} role="status">
               {selectedConversation?.isGroup ||
               selectedConversation?.connectionAllowed === true ? (
                 <>
-                  <span>Invitation to this conversation</span>
-                  <button type="button" className="primary-button" onClick={() => void acceptInvitation()} disabled={joiningRoom}>
-                    {joiningRoom ? "Joining…" : "Accept invitation"}
-                  </button>
+                  <span>
+                    {selectedConversation?.isGroup
+                      ? `Invitation to encrypted group "${selectedConversation.name}"`
+                      : "Invitation to this conversation"}
+                  </span>
+                  <div className="invitation-actions">
+                    <button type="button" className="primary-button" onClick={() => void acceptInvitation()} disabled={joiningRoom}>
+                      {joiningRoom ? "Joining…" : "Accept invitation"}
+                    </button>
+                    {selectedConversation?.isGroup && (
+                      <button type="button" className="secondary-button" onClick={() => void declineInvitation()} disabled={joiningRoom}>
+                        {joiningRoom ? "Working…" : "Decline"}
+                      </button>
+                    )}
+                  </div>
                 </>
               ) : (
                 <span>Accept a connection request before joining this direct room.</span>
@@ -1027,7 +1128,8 @@ export function ChatPage() {
               typingAllowed={Boolean(
                 mode === "live" && matrix.status === "connected" &&
                 selectedRoom?.getMyMembership() === "join" &&
-                selectedConversation.connectionAllowed === true &&
+                (selectedConversation.isGroup ||
+                  selectedConversation.connectionAllowed === true) &&
                 canSendEncryptedMessage
               )}
               disabled={
@@ -1124,6 +1226,7 @@ export function ChatPage() {
           selectConversation(conversation);
         }}
         onSendRequest={sendConnectionRequest}
+        onCreateGroup={createGroup}
       />
       {securityOpen && (
         <MatrixSecurityDialog

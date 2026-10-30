@@ -128,3 +128,66 @@ describe("message pin actions and timestamps", () => {
     expect(document.activeElement).toBe(trigger);
   });
 });
+
+it("does not show group delivery or read receipts from one member", () => {
+  const conversation = { isGroup: true } as Conversation;
+  const message = {
+    id: "$group-message",
+    sender: "me",
+    text: "Hello group",
+    sentAt: new Date(1_750_000_000_000),
+    delivery: "read",
+    readAt: new Date(1_750_000_000_000),
+  } as Message;
+
+  render(
+    <MessageBubble
+      message={message}
+      conversation={conversation}
+      matrixSession={null}
+    />,
+  );
+
+  expect(screen.getByLabelText("Sent")).toBeTruthy();
+  expect(screen.queryByLabelText("Read")).toBeNull();
+  expect(screen.queryByLabelText(/^Seen at /)).toBeNull();
+});
+
+it("keeps group sender labels, replies, and event timestamps visible", () => {
+  const sentAt = new Date(1_750_000_000_000);
+  const conversation = { isGroup: true } as Conversation;
+  const message = {
+    id: "$reply",
+    sender: "them",
+    senderName: "Bob",
+    text: "Thanks!",
+    sentAt,
+    delivery: "sent",
+    replyTo: {
+      eventId: "$original",
+      sender: "Alice",
+      text: "Please review this.",
+    },
+    matrix: {
+      eventId: "$reply",
+      roomId: "!group:localhost",
+      eventType: "m.room.encrypted",
+      senderId: "@bob:localhost",
+      encryptionStatus: "decrypted",
+    },
+  } as Message;
+  const view = render(
+    <MessageBubble
+      message={message}
+      conversation={conversation}
+      matrixSession={null}
+    />,
+  );
+
+  expect(view.container.querySelector(".message-sender")?.textContent).toBe("Bob");
+  expect(screen.getByText("Alice")).toBeTruthy();
+  expect(screen.getByText("Please review this.")).toBeTruthy();
+  expect(view.container.querySelector("time")?.getAttribute("dateTime")).toBe(
+    sentAt.toISOString(),
+  );
+});
