@@ -12,6 +12,18 @@ import { UserAvatar } from "../UserAvatar";
 import type { AuthMode, Conversation, MatrixSession } from "../../types";
 import type { MatrixCryptoStatus } from "../../types/matrix";
 
+function groupTypingStatus(names: string[]): string {
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  if (names.length > 2) {
+    const additional = names.length - 2;
+    return `${names[0]}, ${names[1]} and ${additional} ${
+      additional === 1 ? "other" : "others"
+    } are typing…`;
+  }
+  return "typing…";
+}
+
 interface ChatHeaderProps {
   conversation: Conversation | null;
   mode: AuthMode;
@@ -51,8 +63,10 @@ export function ChatHeader({
     !conversation.isGroup &&
     conversation.connectionAllowed !== true
       ? "Connection required · sending blocked"
-      : conversation.isTyping
-    ? "typing…"
+    : conversation.isTyping
+    ? conversation.isGroup
+      ? groupTypingStatus(conversation.typingNames ?? [])
+      : "typing…"
     : conversation.isEncrypted
     ? cryptoStatus === "ready"
       ? "End-to-end encrypted · Rust crypto"

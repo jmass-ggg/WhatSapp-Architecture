@@ -1,5 +1,5 @@
 import { ArrowUpRight, LoaderCircle, Search, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { UserAvatar } from "../UserAvatar";
 import type { ApiClient } from "../../services/api/client";
@@ -24,6 +24,7 @@ interface NewConversationDialogProps {
   onClose: () => void;
   onSelectDemo: (conversation: Conversation) => void;
   onSendRequest: (user: DirectoryUser) => Promise<void>;
+  onCreateGroup: (name: string, contactUserIds: string[]) => Promise<void>;
 }
 
 export function NewConversationDialog({
@@ -38,6 +39,7 @@ export function NewConversationDialog({
   onClose,
   onSelectDemo,
   onSendRequest,
+  onCreateGroup,
 }: NewConversationDialogProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DirectoryUser[]>([]);
@@ -45,9 +47,38 @@ export function NewConversationDialog({
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [sentRequestIds, setSentRequestIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState("");
+  const [groupMode, setGroupMode] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const creatingGroupRef = useRef(false);
+
+  const selectableContacts = [
+    ...new Map(
+      connections
+        .filter(
+          (connection) =>
+            connection.status === "accepted" &&
+            connection.other_user.id !== currentUserId,
+        )
+        .map((connection) => [connection.other_user.id, connection]),
+    ).values(),
+  ];
 
   useEffect(() => {
-    if (!open || mode !== "live" || query.trim().length < 2) {
+    if (!open) return;
+    setGroupMode(false);
+    setGroupName("");
+    setSelectedGroupMemberIds(new Set());
+    setError("");
+    creatingGroupRef.current = false;
+    setCreatingGroup(false);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || groupMode || mode !== "live" || query.trim().length < 2) {
       setResults([]);
       setLoading(false);
       setError("");
@@ -84,7 +115,7 @@ export function NewConversationDialog({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [api, currentUserId, mode, open, query]);
+  }, [api, currentUserId, groupMode, mode, open, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -126,6 +157,56 @@ export function NewConversationDialog({
     }
   }
 
+  async function createGroup() {
+    if (creatingGroupRef.current) return;
+    const name = groupName.trim();
+    if (!name) {
+      setError("Enter a name for the group.");
+      return;
+    }
+    if (name.length > 80) {
+      setError("Group names must be 80 characters or fewer.");
+      return;
+    }
+
+    const contactUserIds = [...selectedGroupMemberIds];
+    const allowedUserIds = new Set(
+      selectableContacts.map((connection) => connection.other_user.id),
+    );
+    if (
+      contactUserIds.length < 2 ||
+      new Set(contactUserIds).size !== contactUserIds.length
+    ) {
+      setError("Select at least two different accepted contacts.");
+      return;
+    }
+    if (
+      contactUserIds.some(
+        (userId) => userId === currentUserId || !allowedUserIds.has(userId),
+      )
+    ) {
+      setError("Groups can only include your accepted contacts.");
+      return;
+    }
+
+    creatingGroupRef.current = true;
+    setCreatingGroup(true);
+    setError("");
+    try {
+      await onCreateGroup(name, contactUserIds);
+      onClose();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The encrypted group could not be created.",
+      );
+    } finally {
+      creatingGroupRef.current = false;
+      setCreatingGroup(false);
+    }
+  }
+
   const demoResults = conversations.filter((conversation) => {
     const term = query.trim().toLowerCase();
     return (
@@ -152,9 +233,13 @@ export function NewConversationDialog({
         <header className="new-chat-dialog-header">
           <div>
             <span className="eyebrow">{mode === "demo" ? "DEMO PREVIEW" : "RECRUITABLE CHAT DIRECTORY"}</span>
-            <h2 id="new-chat-title">Start a conversation</h2>
+            <h2 id="new-chat-title">
+              {groupMode ? "Create a group" : "Start a conversation"}
+            </h2>
             <p>
-              {mode === "demo"
+              {groupMode
+                ? "Create an encrypted group with at least two of your accepted contacts."
+                : mode === "demo"
                 ? "Choose a sample conversation. Nothing is sent to a server."
                 : "Search by username and send a connection request. You can chat after they accept."}
             </p>
@@ -163,20 +248,105 @@ export function NewConversationDialog({
             <X size={19} />
           </button>
         </header>
-        <label className="new-chat-search">
-          <Search size={18} aria-hidden="true" />
-          <span className="sr-only">Search people</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={mode === "demo" ? "Find a sample contact" : "Search username"}
-            autoFocus
-            autoComplete="off"
-          />
-        </label>
+        {mode === "live" && (
+          <div className="conversation-creation-options" aria-label="Conversation type">
+            <button
+              type="button"
+              aria-pressed={!groupMode}
+              className={!groupMode ? "is-active" : ""}
+              onClick={() => {
+                setGroupMode(false);
+                setError("");
+              }}
+            >
+              New conversation
+            </button>
+            <button
+              type="button"
+              aria-pressed={groupMode}
+              className={groupMode ? "is-active" : ""}
+              onClick={() => {
+                setGroupMode(true);
+                setError("");
+              }}
+            >
+              New Group
+            </button>
+          </div>
+        )}
+        {groupMode ? (
+          <label className="group-name-field">
+            <span>Group name</span>
+            <input
+              aria-label="Group name"
+              value={groupName}
+              onChange={(event) => setGroupName(event.target.value)}
+              maxLength={80}
+              autoComplete="off"
+              placeholder="e.g. Development Team"
+            />
+          </label>
+        ) : (
+          <label className="new-chat-search">
+            <Search size={18} aria-hidden="true" />
+            <span className="sr-only">Search people</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={mode === "demo" ? "Find a sample contact" : "Search username"}
+              autoFocus
+              autoComplete="off"
+            />
+          </label>
+        )}
         {error && <p className="dialog-error" role="alert">{error}</p>}
 
-        <div className="new-chat-results">
+        {groupMode ? (
+          <div className="new-chat-results group-contact-results">
+            {selectableContacts.length === 0 ? (
+              <div className="directory-state">
+                Accept connection requests before creating a group.
+              </div>
+            ) : (
+              selectableContacts.map((connection) => {
+                const contact = connection.other_user;
+                const name = contact.profile?.display_name || contact.username;
+                const selected = selectedGroupMemberIds.has(contact.id);
+                return (
+                  <label
+                    className={`directory-result group-contact-option${selected ? " is-selected" : ""}`}
+                    key={contact.id}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={name}
+                      checked={selected}
+                      onChange={(event) => {
+                        setSelectedGroupMemberIds((current) => {
+                          const next = new Set(current);
+                          if (event.target.checked) next.add(contact.id);
+                          else next.delete(contact.id);
+                          return next;
+                        });
+                      }}
+                    />
+                    <UserAvatar
+                      name={name}
+                      initials={name.trim().split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase()}
+                      size="md"
+                      avatarUrl={contact.profile?.profile_picture_url}
+                    />
+                    <span className="directory-result-copy">
+                      <strong>{name}</strong>
+                      <small>@{contact.username}</small>
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        ) : (
+          <div className="new-chat-results">
           {mode === "demo" ? (
             demoResults.map((conversation) => (
               <button
@@ -262,7 +432,36 @@ export function NewConversationDialog({
               );
             })
           )}
-        </div>
+          </div>
+        )}
+        {groupMode && (
+          <footer className="group-create-footer">
+            <span>
+              {selectedGroupMemberIds.size} selected · Choose at least 2
+            </span>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={creatingGroup}
+              onClick={() => void createGroup()}
+            >
+              {creatingGroup ? (
+                <>
+                  <LoaderCircle className="spin" size={15} />
+                  Creating…
+                </>
+              ) : (
+                "Create Group"
+              )}
+            </button>
+          </footer>
+        )}
+        {creatingGroup && (
+          <div className="group-create-progress" role="status">
+            <LoaderCircle className="spin" size={15} />
+            Creating encrypted group and sending invitations…
+          </div>
+        )}
       </section>
     </div>
   );

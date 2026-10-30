@@ -39,6 +39,11 @@ export function MessageBubble({
   onJump,
 }: MessageBubbleProps) {
   const outgoing = message.sender === "me";
+  const delivery =
+    conversation.isGroup &&
+    (message.delivery === "delivered" || message.delivery === "read")
+      ? "sent"
+      : message.delivery;
   return (
     <article
       className={`message-row${outgoing ? " is-outgoing" : ""}`}
@@ -69,8 +74,8 @@ export function MessageBubble({
             <time dateTime={message.sentAt.toISOString()}>
               {formatMessageTime(message.sentAt)}
             </time>
-            {outgoing && <Receipt delivery={message.delivery} />}
-            {outgoing && message.delivery === "read" && message.readAt && (
+            {outgoing && <Receipt delivery={delivery} />}
+            {outgoing && !conversation.isGroup && message.delivery === "read" && message.readAt && (
               <time dateTime={message.readAt.toISOString()} aria-label={`Seen at ${formatMessageTime(message.readAt)}`}>
                 Seen at {formatMessageTime(message.readAt)}
               </time>

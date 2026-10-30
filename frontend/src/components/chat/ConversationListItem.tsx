@@ -1,4 +1,4 @@
-import { CheckCheck, Check, Clock3 } from "lucide-react";
+import { CheckCheck, Check, Clock3, UsersRound } from "lucide-react";
 
 import { UserAvatar } from "../UserAvatar";
 import type { Conversation } from "../../types";
@@ -51,12 +51,36 @@ export function ConversationListItem({
       />
       <span className="conversation-row-body">
         <span className="conversation-row-top">
-          <span className="conversation-name">{conversation.name}</span>
+          <span className="conversation-title">
+            {conversation.isGroup && (
+              <span
+                className="conversation-group-indicator"
+                role="img"
+                aria-label="Group conversation"
+                title="Group"
+              >
+                <UsersRound size={13} aria-hidden="true" />
+              </span>
+            )}
+            <span className="conversation-name">{conversation.name}</span>
+            {conversation.isInvited && (
+              <span className="conversation-invite-badge">Invited</span>
+            )}
+          </span>
           <span className="conversation-time">{formatActivity(conversation.updatedAt)}</span>
         </span>
         <span className="conversation-row-bottom">
           <span className={`conversation-preview${conversation.isTyping ? " typing" : ""}`}>
-            {isOwnPreview && <CheckCheck size={14} className="preview-check" aria-label="Sent" />}
+            {isOwnPreview &&
+              (conversation.isGroup ? (
+                conversation.lastMessageDelivery === "sent" ? (
+                  <Check size={14} className="preview-check" aria-label="Sent" />
+                ) : conversation.lastMessageDelivery === "sending" ? (
+                  <Clock3 size={12} aria-label="Sending" />
+                ) : null
+              ) : (
+                <CheckCheck size={14} className="preview-check" aria-label="Sent" />
+              ))}
             {conversation.isTyping && <Clock3 size={12} aria-hidden="true" />}
             {messageText}
           </span>
@@ -65,7 +89,9 @@ export function ConversationListItem({
               {conversation.unreadCount > 99 ? "99+" : conversation.unreadCount}
             </span>
           )}
-          {conversation.unreadCount === 0 && conversation.lastMessage.startsWith("You:") && (
+          {conversation.unreadCount === 0 &&
+            !conversation.isGroup &&
+            conversation.lastMessage.startsWith("You:") && (
             <Check size={13} className="preview-check" aria-label="Sent" />
           )}
         </span>
