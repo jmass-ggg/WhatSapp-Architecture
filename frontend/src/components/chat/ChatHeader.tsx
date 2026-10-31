@@ -28,14 +28,17 @@ export function ChatHeader({ conversation, matrixSession, onBack }: ChatHeaderPr
     );
   }
 
-  // Presence is not requested from Synapse, so no online/offline status is shown.
+  // Only a definite "online" from Synapse presence is shown; anything else shows no dot.
+  const online = !conversation.isGroup && conversation.presence === "online";
   const status = conversation.isTyping
     ? conversation.isGroup
       ? groupTypingStatus(conversation.typingNames ?? [])
       : "typing…"
     : conversation.isGroup
       ? conversation.bio ?? "Group"
-      : conversation.username
+      : online
+        ? "Online"
+        : conversation.username
         ? `@${conversation.username}`
         : "";
 
@@ -51,10 +54,11 @@ export function ChatHeader({ conversation, matrixSession, onBack }: ChatHeaderPr
         avatarUrl={conversation.avatarUrl}
         matrixToken={matrixSession?.access_token}
         size="md"
+        presence={conversation.isGroup ? undefined : conversation.presence}
       />
       <div className="chat-header-person">
         <h1>{conversation.name}</h1>
-        {status && <span className={conversation.isTyping ? "typing-text" : ""}>{status}</span>}
+        {status && <span className={conversation.isTyping ? "typing-text" : online ? "online-text" : ""}>{status}</span>}
       </div>
     </header>
   );

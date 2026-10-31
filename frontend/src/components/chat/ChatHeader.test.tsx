@@ -21,10 +21,27 @@ it("shows and clears incoming typing without any encryption indicator", () => {
   expect(screen.getByText("@alice")).toBeTruthy();
 });
 
-it("never claims online presence and offers a back button for mobile", () => {
+it("shows Online text and a green dot for an online direct contact", () => {
+  render(<ChatHeader conversation={{ ...conversation, isTyping: false, presence: "online" }} matrixSession={null} onBack={vi.fn()} />);
+  expect(screen.getByText("Online")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "Online" })).toBeTruthy();
+});
+
+it.each(["unknown", "unavailable", "offline"] as const)("shows no dot or online text when presence is %s", (presence) => {
+  render(<ChatHeader conversation={{ ...conversation, isTyping: false, presence }} matrixSession={null} onBack={vi.fn()} />);
+  expect(screen.queryByText("Online")).toBeNull();
+  expect(screen.queryByRole("img", { name: "Online" })).toBeNull();
+});
+
+it("never shows a single-user online dot for a group", () => {
+  render(<ChatHeader conversation={{ ...conversation, isTyping: false, isGroup: true, presence: "online" }} matrixSession={null} onBack={vi.fn()} />);
+  expect(screen.queryByRole("img", { name: "Online" })).toBeNull();
+  expect(screen.queryByText("Online")).toBeNull();
+});
+
+it("offers a back button for mobile", () => {
   const onBack = vi.fn();
-  render(<ChatHeader conversation={{ ...conversation, isTyping: false, isOnline: true }} matrixSession={null} onBack={onBack} />);
-  expect(screen.queryByText(/online/i)).toBeNull();
+  render(<ChatHeader conversation={{ ...conversation, isTyping: false }} matrixSession={null} onBack={onBack} />);
   fireEvent.click(screen.getByRole("button", { name: "Back to conversations" }));
   expect(onBack).toHaveBeenCalled();
 });

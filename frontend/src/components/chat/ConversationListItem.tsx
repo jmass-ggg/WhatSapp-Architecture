@@ -47,7 +47,7 @@ export function ConversationListItem({
         size="md"
         avatarUrl={conversation.avatarUrl}
         matrixToken={matrixToken}
-        online={conversation.isOnline}
+        presence={conversation.presence}
       />
       <span className="conversation-row-body">
         <span className="conversation-row-top">

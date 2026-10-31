@@ -76,3 +76,15 @@ it("lets the user accept or decline an incoming connection request", () => {
   expect(handlers.onAcceptRequest).toHaveBeenCalledWith(request);
   expect(handlers.onDeclineRequest).toHaveBeenCalledWith(request);
 });
+
+it("shows a green dot on an online direct contact only, never on groups", () => {
+  setup([
+    conversation({ id: "!on:localhost", name: "Alice", presence: "online" }),
+    conversation({ id: "!off:localhost", name: "Bob", presence: "offline" }),
+    conversation({ id: "!unk:localhost", name: "Cara", presence: "unknown" }),
+    conversation({ id: "!g:localhost", name: "Team", isGroup: true }),
+  ]);
+  expect(screen.getAllByRole("img", { name: "Online" })).toHaveLength(1);
+  const alice = screen.getByText("Alice").closest("button")!;
+  expect(within(alice).getByRole("img", { name: "Online" })).toBeTruthy();
+});

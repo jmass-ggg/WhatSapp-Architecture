@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchMatrixMedia } from "../services/matrix/media";
+import type { PresenceState } from "../types";
 
 interface UserAvatarProps {
   name: string;
@@ -9,7 +10,8 @@ interface UserAvatarProps {
   size?: "sm" | "md" | "lg" | "xl";
   avatarUrl?: string | null;
   matrixToken?: string | null;
-  online?: boolean;
+  /** Only "online" shows a dot; unknown/unavailable show nothing. */
+  presence?: PresenceState;
   className?: string;
 }
 
@@ -29,7 +31,7 @@ export function UserAvatar({
   size = "md",
   avatarUrl,
   matrixToken,
-  online,
+  presence,
   className = "",
 }: UserAvatarProps) {
   const [imageSource, setImageSource] = useState<string | null>(null);
@@ -83,12 +85,10 @@ export function UserAvatar({
       ) : (
         <span aria-hidden="true">{initials}</span>
       )}
-      {online !== undefined && (
-        <span
-          className={`avatar-presence${online ? " is-online" : ""}`}
-          aria-label={online ? "Online" : "Offline"}
-        />
+      {presence === "online" && (
+        <span className="avatar-presence is-online" role="img" aria-label="Online" />
       )}
+      {presence === "offline" && <span className="sr-only">Offline</span>}
     </span>
   );
 }

@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MatrixSession } from "../../types";
 import type { MatrixClientFactory } from "./client";
+import { UserEvent } from "matrix-js-sdk";
 import { MatrixClientRegistry, MatrixClientSession } from "./session";
 
 const userA = "@u_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:localhost";
@@ -31,6 +32,7 @@ class FakeMatrixClient {
   /** Any crypto call would be a regression: the session must never touch crypto. */
   readonly initRustCrypto = vi.fn(async () => undefined);
   readonly getCrypto = vi.fn(() => undefined);
+  readonly getPresence = vi.fn(async (_userId: string): Promise<{ presence?: string }> => ({ presence: "online" }));
   rooms: Room[] = [];
   options: IMatrixClientCreateOpts | undefined;
 
@@ -188,6 +190,71 @@ describe("Matrix client session lifecycle (plaintext)", () => {
     expect(client.listenerCount(ClientEvent.Sync)).toBe(0);
     expect(client.listenerCount(RoomEvent.Timeline)).toBe(0);
     expect(manager.getSnapshot().status).toBe("disabled");
+  });
+});
+
+describe("Matrix presence integration", () => {
+  const peer = "@u_cccccccccccccccccccccccccccccccc:localhost";
+  const directRoom = () => ({
+    ...room("!dm:localhost", "Peer"),
+    getMembers: () => [{ userId: peer, membership: "join", name: "Peer", typing: false, events: { member: { getContent: () => ({}) } } }],
+  }) as unknown as Room;
+
+  it("reads initial presence for direct-chat peers once and reacts to live updates", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    client.rooms = [directRoom()];
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+    await waitFor(() => expect(manager.getSnapshot().presence[peer]).toBe("online"));
+
+    client.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Prepared);
+    expect(client.getPresence).toHaveBeenCalledTimes(1);
+
+    client.emit(UserEvent.Presence, undefined, { userId: peer, presence: "offline" });
+    expect(manager.getSnapshot().presence[peer]).toBe("offline");
+    manager.dispose();
+  });
+
+  it("drops stale presence while reconnecting and re-reads it afterwards", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    client.rooms = [directRoom()];
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+    await waitFor(() => expect(manager.getSnapshot().presence[peer]).toBe("online"));
+
+    client.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
+    expect(manager.getSnapshot().presence).toEqual({});
+    client.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Reconnecting);
+    await waitFor(() => expect(client.getPresence).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(manager.getSnapshot().presence[peer]).toBe("online"));
+    manager.dispose();
+  });
+
+  it("reports unknown when the server forbids reading presence", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    client.rooms = [directRoom()];
+    client.getPresence.mockRejectedValue(Object.assign(new Error("forbidden"), { httpStatus: 403 }));
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+    await waitFor(() => expect(manager.getSnapshot().presence[peer]).toBe("unknown"));
+    manager.dispose();
+  });
+
+  it("does not request presence for groups or invitations and removes its listener on dispose", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const invited = { ...directRoom(), roomId: "!inv:localhost", getMyMembership: () => "invite" } as unknown as Room;
+    client.rooms = [invited];
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    expect(client.listenerCount(UserEvent.Presence)).toBe(1);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+    expect(client.getPresence).not.toHaveBeenCalled();
+
+    manager.dispose();
+    expect(client.listenerCount(UserEvent.Presence)).toBe(0);
   });
 });
 

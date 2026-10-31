@@ -1,6 +1,6 @@
 import type { MatrixClient, MatrixEvent, Room, SyncState } from "matrix-js-sdk";
 
-import type { Conversation, MatrixSession } from "../../types";
+import type { Conversation, MatrixSession, PresenceState } from "../../types";
 import {
   createAuthenticatedMatrixClient,
   isMatrixAuthenticationError,
@@ -8,6 +8,7 @@ import {
   type MatrixClientFactory,
   verifyMatrixClientIdentity,
 } from "./client";
+import { PresenceTracker } from "./presence";
 import { conversationsFromMatrixClient, legacyEncryptedRoomIds } from "./rooms";
 
 export type MatrixConnectionStatus =
@@ -33,6 +34,8 @@ export interface MatrixConnectionSnapshot {
   /** IDs of retired encrypted rooms hidden from the UI (inventory only). */
   legacyRoomIds: string[];
   recentEvents: MatrixEventSummary[];
+  /** Matrix presence of direct-chat peers by Matrix user ID. Missing means unknown. */
+  presence: Record<string, PresenceState>;
   error: string | null;
   authenticationError: boolean;
 }
@@ -43,6 +46,7 @@ export const EMPTY_MATRIX_CONNECTION_SNAPSHOT: MatrixConnectionSnapshot = {
   rooms: [],
   legacyRoomIds: [],
   recentEvents: [],
+  presence: {},
   error: null,
   authenticationError: false,
 };
@@ -55,6 +59,7 @@ export class MatrixClientSession {
   private clientInstance: MatrixClient | null = null;
   private sdk: typeof import("matrix-js-sdk") | null = null;
   private readonly seenEventIds = new Set<string>();
+  private presenceTracker: PresenceTracker | null = null;
   private retainCount = 0;
   private releaseGeneration = 0;
   private disposed = false;
@@ -86,6 +91,7 @@ export class MatrixClientSession {
           error: null,
           authenticationError: false,
         });
+        this.trackPeerPresence();
         break;
       case syncStates.Syncing:
         this.publish({
@@ -99,9 +105,12 @@ export class MatrixClientSession {
           error: null,
           authenticationError: false,
         });
+        this.trackPeerPresence();
         break;
       case syncStates.Catchup:
       case syncStates.Reconnecting:
+        // Presence we hold is stale while our own connection is down.
+        this.presenceTracker?.reset();
         this.publish({ status: "reconnecting", error: null, authenticationError: false });
         break;
       case syncStates.Error:
@@ -113,6 +122,7 @@ export class MatrixClientSession {
             error: SYNC_RETRY_MESSAGE,
             authenticationError: false,
           });
+          this.presenceTracker?.reset();
         }
         break;
       case syncStates.Stopped:
@@ -208,6 +218,8 @@ export class MatrixClientSession {
       this.detachListeners();
     }
     this.clientInstance = null;
+    this.presenceTracker?.dispose();
+    this.presenceTracker = null;
     this.snapshot = { ...EMPTY_MATRIX_CONNECTION_SNAPSHOT };
     for (const listener of this.listeners) listener();
     this.listeners.clear();
@@ -276,6 +288,8 @@ export class MatrixClientSession {
         return;
       }
       this.attachListeners();
+      this.presenceTracker = new PresenceTracker(client, (presence) => this.publish({ presence }));
+      this.presenceTracker.attach();
       await verifyMatrixClientIdentity(client, this.session, this.expectedUserId);
       if (this.disposed || this.authFailure) return;
       phase = "sync";
@@ -289,6 +303,8 @@ export class MatrixClientSession {
       if (phase !== "sync") {
         client?.stopClient();
         this.detachListeners();
+        this.presenceTracker?.dispose();
+        this.presenceTracker = null;
       }
       this.publish({
         status: "error",
@@ -346,8 +362,19 @@ export class MatrixClientSession {
       this.refreshQueued = false;
       if (!this.disposed && this.snapshot.initialSyncComplete) {
         this.publish(this.readRooms());
+        this.trackPeerPresence();
       }
     });
+  }
+
+  /** Reads initial presence for people we have a direct chat with (once per user). */
+  private trackPeerPresence(): void {
+    if (!this.presenceTracker) return;
+    this.presenceTracker.ensure(
+      this.snapshot.rooms
+        .filter((room) => !room.isGroup && !room.isInvited && room.matrixUserId)
+        .map((room) => room.matrixUserId as string),
+    );
   }
 
   private readRooms(): Pick<MatrixConnectionSnapshot, "rooms" | "legacyRoomIds"> {

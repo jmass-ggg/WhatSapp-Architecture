@@ -105,6 +105,8 @@ export interface Message {
   };
 }
 
+export type PresenceState = "online" | "unavailable" | "offline" | "unknown";
+
 export interface Conversation {
   id: string;
   name: string;
@@ -113,7 +115,8 @@ export interface Conversation {
   initials: string;
   avatarUrl?: string | null;
   accent: number;
-  isOnline?: boolean;
+  /** Matrix presence of the other person; undefined for groups. */
+  presence?: PresenceState;
   isTyping?: boolean;
   typingNames?: string[];
   lastMessage: string;

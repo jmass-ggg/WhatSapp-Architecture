@@ -66,7 +66,7 @@ export function ChatPage() {
   const navigate = useNavigate();
   const { conversationId } = useParams<{ conversationId: string }>();
   const matrix = useMatrixRooms();
-  const { client } = useMatrixContext();
+  const { client, presence } = useMatrixContext();
   const contacts = useConnections(api, mode === "live" ? user?.id : undefined);
 
   const [dialog, setDialog] = useState<null | "chat" | "group">(null);
@@ -95,7 +95,7 @@ export function ChatPage() {
 
   const conversations = useMemo(() => {
     const roomConversations = matrix.rooms.map((room) => {
-      if (room.isGroup) return { ...room, connectionAllowed: true };
+      if (room.isGroup) return { ...room, presence: undefined, connectionAllowed: true };
       const connection = room.matrixUserId ? connectionsByMatrixUserId.get(room.matrixUserId) : undefined;
       const contact = connection?.other_user;
       return {
@@ -103,6 +103,7 @@ export function ChatPage() {
         contactUserId: contact?.id,
         connectionUserId: contact?.id,
         connectionAllowed: Boolean(connection),
+        presence: room.matrixUserId ? presence[room.matrixUserId] ?? "unknown" : "unknown",
         name: contact?.profile?.display_name || contact?.username || room.name,
         username: contact?.username || room.username,
         avatarUrl: contact?.profile?.profile_picture_url ?? room.avatarUrl,
@@ -117,7 +118,7 @@ export function ChatPage() {
     return [...roomConversations, ...withoutRooms].sort(
       (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
     );
-  }, [contacts.connections, connectionsByMatrixUserId, matrix.rooms]);
+  }, [contacts.connections, connectionsByMatrixUserId, matrix.rooms, presence]);
 
   // The requester of an accepted connection creates the fresh plaintext direct room.
   useEffect(() => {

@@ -324,3 +324,7 @@
     display: flex;
   }
 }
+
+.chat-header-person .online-text {
+  color: #15803d;
+}
