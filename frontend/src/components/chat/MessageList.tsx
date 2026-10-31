@@ -199,7 +199,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   return (
     <div
-      className={`messages-scroll${conversation.isDemo ? " messages-demo" : ""}`}
+      className="messages-scroll"
       aria-label={`Messages with ${conversation.name}`}
       role="log"
       aria-live="polite"
@@ -210,11 +210,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         if (event.target instanceof HTMLImageElement) scrollToLatest();
       }}
     >
-      {conversation.isDemo && (
-        <div className="demo-message-note">
-          Sample messages · sent messages stay in this preview
-        </div>
-      )}
       {searchOpen && term && (
         <div className="search-result-note" role="status">
           {messages.length} {messages.length === 1 ? "message" : "messages"} found in loaded history

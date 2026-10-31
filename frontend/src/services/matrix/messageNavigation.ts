@@ -37,13 +37,6 @@ async function messageFromEvent(
     throw new Error("That message was deleted or redacted and is unavailable.");
   }
 
-  try {
-    await client.decryptEventIfNeeded(event);
-  } catch {
-    // messageFromMatrixEvent intentionally returns a safe encrypted placeholder
-    // when no usable room key is available.
-  }
-
   const userId = client.getUserId();
   if (!userId) throw new Error("Your Matrix session is no longer available.");
   const message = messageFromMatrixEvent(event, room.roomId, userId);
@@ -78,7 +71,7 @@ async function findWithEventContext(
 /**
  * Resolves banner metadata without inserting an old event into the visible
  * timeline. The sender, time and content still come from the Matrix event and
- * encrypted events are passed through the local crypto backend before mapping.
+ * only plaintext m.room.message events are mapped.
  */
 export async function loadMatrixMessagePreview(
   client: MatrixClient,

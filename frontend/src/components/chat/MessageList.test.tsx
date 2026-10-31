@@ -39,7 +39,7 @@ function message(eventId: string, text: string): Message {
     matrix: {
       eventId,
       roomId: "!room:localhost",
-      eventType: "m.room.encrypted",
+      eventType: "m.room.message",
       senderId: "@kelly:localhost",
     },
   };
@@ -55,7 +55,6 @@ function conversation(messages: Message[] = []): Conversation {
     updatedAt: new Date(),
     unreadCount: 0,
     messages,
-    isEncrypted: true,
   };
 }
 

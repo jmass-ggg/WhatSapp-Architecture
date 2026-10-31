@@ -1,294 +1,178 @@
-import {
-  Ellipsis,
-  LogOut,
-  MessageSquarePlus,
-  Settings2,
-  UsersRound,
-} from "lucide-react";
+import { LogOut, MessageSquarePlus, UsersRound } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Brand } from "../Brand";
-import { MatrixConnectionStatus } from "../MatrixConnectionStatus";
 import { SearchInput } from "../SearchInput";
 import { UserAvatar } from "../UserAvatar";
 import { ConversationListItem } from "./ConversationListItem";
-import type {
-  AuthMode,
-  Conversation,
-  MatrixSession,
-  UserConnection,
-  UserProfile,
-} from "../../types";
-import type { MatrixConnectionStatus as ConnectionStatus } from "../../services/matrix/session";
-import type {
-  MatrixCryptoOnboardingStatus,
-  MatrixCryptoStatus,
-} from "../../types/matrix";
+import type { Conversation, MatrixSession, UserConnection, UserProfile } from "../../types";
 
 interface ConversationSidebarProps {
   conversations: Conversation[];
   selectedId?: string;
   currentUser: UserProfile;
-  mode: AuthMode;
   matrixSession: MatrixSession | null;
-  matrixStatus: ConnectionStatus;
-  initialSyncComplete: boolean;
-  cryptoStatus: MatrixCryptoStatus;
-  cryptoOnboardingStatus: MatrixCryptoOnboardingStatus;
-  authenticationError: boolean;
   incomingRequests: UserConnection[];
   requestsLoading: boolean;
   requestError: string | null;
   respondingRequestId: string | null;
+  loading?: boolean;
   onSelect: (conversation: Conversation) => void;
   onAcceptRequest: (request: UserConnection) => void;
   onDeclineRequest: (request: UserConnection) => void;
   onNewChat: () => void;
+  onNewGroup: () => void;
   onSignOut: () => void;
-  onSettings: () => void;
+}
+
+function initialsFor(name: string): string {
+  return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
 export function ConversationSidebar({
   conversations,
   selectedId,
   currentUser,
-  mode,
   matrixSession,
-  matrixStatus,
-  initialSyncComplete,
-  cryptoStatus,
-  cryptoOnboardingStatus,
-  authenticationError,
   incomingRequests,
   requestsLoading,
   requestError,
   respondingRequestId,
+  loading = false,
   onSelect,
   onAcceptRequest,
   onDeclineRequest,
   onNewChat,
+  onNewGroup,
   onSignOut,
-  onSettings,
 }: ConversationSidebarProps) {
   const [query, setQuery] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
   const filtered = useMemo(() => {
     const value = query.trim().toLowerCase();
     if (!value) return conversations;
     return conversations.filter(
       (conversation) =>
         conversation.name.toLowerCase().includes(value) ||
+        conversation.username?.toLowerCase().includes(value) ||
         conversation.lastMessage.toLowerCase().includes(value),
     );
   }, [conversations, query]);
-
+  const direct = filtered.filter((conversation) => !conversation.isGroup);
+  const groups = filtered.filter((conversation) => conversation.isGroup);
   const displayName = currentUser.profile.display_name || currentUser.username;
+
+  const renderList = (label: string, items: Conversation[]) => (
+    <section className="conversation-section" aria-label={label}>
+      <h2 className="sidebar-list-heading">{label}</h2>
+      {items.length === 0 ? (
+        <p className="sidebar-empty">{query ? "No matches." : `No ${label.toLowerCase()} yet.`}</p>
+      ) : (
+        <div className="conversation-list" role="list">
+          {items.map((conversation) => (
+            <div className="conversation-list-item" role="listitem" key={conversation.id}>
+              <ConversationListItem
+                conversation={conversation}
+                selected={selectedId === conversation.id}
+                matrixToken={matrixSession?.access_token}
+                onSelect={() => onSelect(conversation)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <aside className="conversation-sidebar" aria-label="Conversations">
       <header className="sidebar-header">
         <Brand />
         <div className="sidebar-actions">
-          <button
-            type="button"
-            className="new-chat-button"
-            onClick={onNewChat}
-            aria-label="Start a new chat"
-            title="Start a new chat"
-          >
+          <button type="button" className="sidebar-icon-button" onClick={onNewChat} aria-label="New chat" title="New chat">
             <MessageSquarePlus size={18} />
           </button>
-          <button
-            type="button"
-            className="sidebar-icon-button"
-            onClick={onSettings}
-            aria-label="Encryption and devices"
-            title="Encryption and devices"
-          >
-            <Settings2 size={18} />
+          <button type="button" className="sidebar-icon-button" onClick={onNewGroup} aria-label="Create group" title="Create group">
+            <UsersRound size={18} />
           </button>
-          <div className="menu-anchor">
-            <button
-              type="button"
-              className="sidebar-icon-button"
-              aria-label="More options"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-            >
-              <Ellipsis size={20} />
-            </button>
-            {menuOpen && (
-              <div className="dropdown-menu sidebar-dropdown">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onNewChat();
-                  }}
-                >
-                  <UsersRound size={16} /> New conversation
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onSignOut();
-                  }}
-                >
-                  <LogOut size={16} /> Sign out
-                </button>
-              </div>
-            )}
-          </div>
         </div>
       </header>
 
-      <button type="button" className="sidebar-new-chat" onClick={onNewChat}>
-        <MessageSquarePlus size={17} />
-        <span>New chat</span>
-        <span className="new-chat-shortcut">⌘ K</span>
-      </button>
+      <div className="sidebar-account">
+        <UserAvatar
+          name={displayName}
+          initials={initialsFor(displayName)}
+          size="sm"
+          avatarUrl={currentUser.profile.profile_picture_url}
+          matrixToken={matrixSession?.access_token}
+        />
+        <div className="sidebar-account-copy">
+          <strong>{displayName}</strong>
+          <span>@{currentUser.username}</span>
+        </div>
+        <button type="button" className="sidebar-icon-button" aria-label="Log out" title="Log out" onClick={onSignOut}>
+          <LogOut size={17} />
+        </button>
+      </div>
 
       <div className="sidebar-search-wrap">
         <SearchInput
           value={query}
           onChange={setQuery}
-          placeholder="Search or start a new chat"
+          placeholder="Search conversations"
           label="Search conversations"
         />
       </div>
 
-      {mode === "live" && (
-        <section className="connection-requests" aria-label="Connection Requests">
-          <div className="sidebar-list-heading">
-            <span>Connection Requests</span>
-            <span>{incomingRequests.length}</span>
-          </div>
+      {(requestsLoading || requestError || incomingRequests.length > 0) && (
+        <section className="connection-requests" aria-label="Connection requests">
+          <h2 className="sidebar-list-heading">Requests ({incomingRequests.length})</h2>
           {requestsLoading ? (
-            <div className="connection-request-state">Loading requests…</div>
+            <p className="sidebar-empty">Loading requests…</p>
           ) : requestError ? (
-            <div className="connection-request-state is-error" role="alert">
-              {requestError}
-            </div>
-          ) : incomingRequests.length === 0 ? (
-            <div className="connection-request-state">No pending requests</div>
+            <p className="sidebar-empty is-error" role="alert">{requestError}</p>
           ) : (
-            <div className="connection-request-list">
-              {incomingRequests.map((request) => {
-                const contact = request.other_user;
-                const name = contact.profile?.display_name || contact.username;
-                const initials = name
-                  .trim()
-                  .split(/\s+/)
-                  .slice(0, 2)
-                  .map((part) => part[0])
-                  .join("")
-                  .toUpperCase();
-                const busy = respondingRequestId === request.id;
-                return (
-                  <div className="connection-request-card" key={request.id}>
-                    <div className="connection-request-person">
-                      <UserAvatar
-                        name={name}
-                        initials={initials}
-                        size="sm"
-                        avatarUrl={contact.profile?.profile_picture_url}
-                        matrixToken={matrixSession?.access_token}
-                      />
-                      <span>
-                        <strong>{name}</strong>
-                        <small>@{contact.username}</small>
-                      </span>
-                    </div>
-                    <div className="connection-request-actions">
-                      <button
-                        type="button"
-                        onClick={() => onAcceptRequest(request)}
-                        disabled={respondingRequestId !== null}
-                      >
-                        {busy ? "Working…" : "Accept"}
-                      </button>
-                      <button
-                        type="button"
-                        className="is-secondary"
-                        onClick={() => onDeclineRequest(request)}
-                        disabled={respondingRequestId !== null}
-                      >
-                        Decline
-                      </button>
-                    </div>
+            incomingRequests.map((request) => {
+              const contact = request.other_user;
+              const name = contact.profile?.display_name || contact.username;
+              const busy = respondingRequestId === request.id;
+              return (
+                <div className="connection-request-card" key={request.id}>
+                  <UserAvatar
+                    name={name}
+                    initials={initialsFor(name)}
+                    size="sm"
+                    avatarUrl={contact.profile?.profile_picture_url}
+                    matrixToken={matrixSession?.access_token}
+                  />
+                  <span className="connection-request-person">
+                    <strong>{name}</strong>
+                    <small>@{contact.username}</small>
+                  </span>
+                  <div className="connection-request-actions">
+                    <button type="button" onClick={() => onAcceptRequest(request)} disabled={respondingRequestId !== null}>
+                      {busy ? "Working…" : "Accept"}
+                    </button>
+                    <button type="button" className="is-secondary" onClick={() => onDeclineRequest(request)} disabled={respondingRequestId !== null}>
+                      Decline
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })
           )}
         </section>
       )}
 
-      <div className="sidebar-list-heading">
-        <span>Messages</span>
-        <span>{filtered.length}</span>
-      </div>
-
-      <div className="conversation-list" role="list" aria-label="Your conversations">
-        {filtered.map((conversation) => (
-          <div className="conversation-list-item" role="listitem" key={conversation.id}>
-            <ConversationListItem
-              conversation={conversation}
-              selected={selectedId === conversation.id}
-              matrixToken={matrixSession?.access_token}
-              onSelect={() => onSelect(conversation)}
-            />
-          </div>
-        ))}
-        {filtered.length === 0 && (
-          <div className="sidebar-empty">
-            {conversations.length === 0
-              ? "Start a conversation to see it here."
-              : "No conversations match that search."}
-          </div>
+      <div className="conversation-scroll">
+        {loading ? (
+          <p className="sidebar-empty" role="status">Loading conversations…</p>
+        ) : (
+          <>
+            {renderList("Direct messages", direct)}
+            {renderList("Groups", groups)}
+          </>
         )}
       </div>
-
-      <footer className="sidebar-account">
-        <UserAvatar
-          name={displayName}
-          initials={displayName
-            .split(/\s+/)
-            .slice(0, 2)
-            .map((part) => part[0])
-            .join("")
-            .toUpperCase()}
-          size="sm"
-          avatarUrl={currentUser.profile.profile_picture_url}
-          matrixToken={matrixSession?.access_token}
-          online={true}
-        />
-        <div className="sidebar-account-copy">
-          <strong>{displayName}</strong>
-          {mode === "demo" ? (
-            <span>Demo mode</span>
-          ) : (
-            <MatrixConnectionStatus
-              status={matrixStatus}
-              initialSyncComplete={initialSyncComplete}
-              cryptoStatus={cryptoStatus}
-              cryptoOnboardingStatus={cryptoOnboardingStatus}
-              authenticationError={authenticationError}
-              compact
-            />
-          )}
-        </div>
-        <button
-          type="button"
-          className="sidebar-account-menu"
-          aria-label="Sign out"
-          title="Sign out"
-          onClick={onSignOut}
-        >
-          <LogOut size={17} />
-        </button>
-      </footer>
     </aside>
   );
 }

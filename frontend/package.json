@@ -9,8 +9,6 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:matrix-live": "node scripts/matrix-live-test.mjs",
-    "test:e2ee-live": "node scripts/matrix-e2ee-live-test.mjs",
-    "test:e2ee-browser": "node scripts/matrix-e2ee-browser-test.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

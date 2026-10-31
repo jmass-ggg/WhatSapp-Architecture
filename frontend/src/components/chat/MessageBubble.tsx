@@ -44,8 +44,6 @@ function Receipt({ delivery }: { delivery: Message["delivery"] }) {
   if (delivery === "cancelled") return <span className="message-failed">Cancelled</span>;
   return delivery === "read" ? (
     <CheckCheck size={14} className="receipt-read" aria-label="Read" />
-  ) : delivery === "delivered" ? (
-    <CheckCheck size={14} aria-label="Delivered" />
   ) : (
     <Check size={14} aria-label="Sent" />
   );
@@ -143,7 +141,7 @@ export function MessageBubble({
 
   const delivery =
     conversation.isGroup &&
-    (message.delivery === "delivered" || message.delivery === "read")
+    message.delivery === "read"
       ? "sent"
       : message.delivery;
 

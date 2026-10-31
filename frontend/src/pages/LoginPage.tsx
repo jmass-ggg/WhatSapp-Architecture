@@ -14,7 +14,7 @@ interface LoginLocationState {
 }
 
 export function LoginPage() {
-  const { signIn, enterDemo } = useAuth();
+  const { signIn } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const routeState = location.state as LoginLocationState | null;
@@ -47,11 +47,6 @@ export function LoginPage() {
     } finally {
       setSubmitting(false);
     }
-  }
-
-  function previewDemo() {
-    enterDemo();
-    navigate("/chat", { replace: true });
   }
 
   return (
@@ -164,9 +159,6 @@ export function LoginPage() {
         <p className="auth-switch">
           Don&apos;t have an account? <Link to="/register">Create an account</Link>
         </p>
-        <button type="button" className="demo-link" onClick={previewDemo}>
-          Preview the chat in clearly labeled demo mode
-        </button>
       </section>
     </AuthLayout>
   );

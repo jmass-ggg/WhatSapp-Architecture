@@ -6,6 +6,7 @@ import { App } from "./App";
 import "./styles/global.css";
 import "./styles/auth.css";
 import "./styles/chat.css";
+import "./styles/layout.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

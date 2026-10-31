@@ -2,10 +2,11 @@ import { ReceiptType, type MatrixEvent, type Room } from "matrix-js-sdk";
 
 import type { Conversation, Message } from "../../types";
 import {
+  isLegacyEncryptedRoom,
   MATRIX_CONVERSATION_MARKER_VERSION,
   MATRIX_DIRECT_MARKER_TYPE,
   MATRIX_GROUP_MARKER_TYPE,
-} from "./encryption";
+} from "./messaging";
 import { messageFromMatrixEvent } from "./events";
 
 function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string | null {
@@ -54,7 +55,6 @@ function timelineMessages(
   ownUserId: string,
   isGroup: boolean,
   recipientId?: string,
-  deliveredIds?: ReadonlySet<string>,
 ): Message[] {
   const byEventId = new Map<string, Message>();
   const events = room.getLiveTimeline().getEvents();
@@ -97,16 +97,13 @@ function timelineMessages(
       !event.getId()?.startsWith("~")) {
       message.delivery = "read";
       if (readAt) message.readAt = readAt;
-    } else if (!isGroup && message.sender === "me" && message.delivery === "sent" &&
-      event.getId() && deliveredIds?.has(event.getId()!)) {
-      message.delivery = "delivered";
     }
     byEventId.set(message.id, message);
   }
   for (const message of byEventId.values()) {
     if (!message.replyTo?.eventId) continue;
     const original = byEventId.get(message.replyTo.eventId);
-    message.replyTo = original && original.matrix?.encryptionStatus !== "failed" && original.matrix?.encryptionStatus !== "pending"
+    message.replyTo = original
       ? { eventId: message.replyTo.eventId, sender: original.sender === "me" ? "You" : original.senderName || "Unknown", text: original.text || original.attachment?.name || "Message unavailable" }
       : { eventId: message.replyTo.eventId, sender: "Original message", text: "Original message unavailable" };
   }
@@ -119,14 +116,13 @@ function latestVisibleEvent(room: Room): MatrixEvent | undefined {
   return [...room.getLiveTimeline().getEvents()]
     .reverse()
     .find((event) =>
-      ["m.room.message", "m.room.encrypted"].includes(event.getType()),
+      event.getType() === "m.room.message",
     );
 }
 
 export function conversationFromMatrixRoom(
   room: Room,
   ownUserId: string,
-  deliveredIds?: ReadonlySet<string>,
 ): Conversation {
   const members = room
     .getMembers()
@@ -150,10 +146,8 @@ export function conversationFromMatrixRoom(
     !isGroup && members.length === 1 && members[0].membership === "join"
       ? members[0].userId
       : undefined,
-    deliveredIds,
   );
   const latest = messages.at(-1);
-  const isEncrypted = room.hasEncryptionStateEvent();
   const typingNames = members
     .filter((member) => member.membership === "join" && member.typing)
     .map(memberDisplayName);
@@ -165,9 +159,7 @@ export function conversationFromMatrixRoom(
     ? isGroup
       ? `${latest?.sender === "me" ? "You" : latest?.senderName || "Group member"}: ${latestText}`
       : latestText
-    : isEncrypted && lastEvent
-      ? "Encrypted message"
-      : isGroup
+    : isGroup
         ? "No messages yet"
         : "Start a conversation";
 
@@ -203,20 +195,26 @@ export function conversationFromMatrixRoom(
     bio: isGroup
       ? `${members.length + 1} members in this group`
       : "Matrix conversation",
-    isDemo: false,
     isGroup,
     isInvited: room.getMyMembership?.() === "invite",
-    isEncrypted,
   };
+}
+
+/** Room IDs of retired (encrypted) rooms the user is still a member of. IDs only. */
+export function legacyEncryptedRoomIds(rooms: Room[]): string[] {
+  return rooms
+    .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
+    .filter(isLegacyEncryptedRoom)
+    .map((room) => room.roomId);
 }
 
 export function conversationsFromMatrixClient(
   rooms: Room[],
   ownUserId: string,
-  deliveredIds?: ReadonlySet<string>,
 ): Conversation[] {
   return rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
-    .map((room) => conversationFromMatrixRoom(room, ownUserId, deliveredIds))
+    .filter((room) => !isLegacyEncryptedRoom(room))
+    .map((room) => conversationFromMatrixRoom(room, ownUserId))
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }

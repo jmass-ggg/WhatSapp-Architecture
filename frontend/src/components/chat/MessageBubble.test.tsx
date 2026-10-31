@@ -38,7 +38,7 @@ describe("message pin actions and timestamps", () => {
     matrix: {
       eventId: "$message:localhost",
       roomId: "!room:localhost",
-      eventType: "m.room.encrypted",
+      eventType: "m.room.message",
       senderId: "@kelly:localhost",
     },
   } as Message;
@@ -171,7 +171,7 @@ it("keeps group sender labels, replies, and event timestamps visible", () => {
     matrix: {
       eventId: "$reply",
       roomId: "!group:localhost",
-      eventType: "m.room.encrypted",
+      eventType: "m.room.message",
       senderId: "@bob:localhost",
       encryptionStatus: "decrypted",
     },

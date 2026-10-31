@@ -7,78 +7,18 @@ import {
   type MatrixClient,
   type Room,
 } from "matrix-js-sdk";
-import { useSyncExternalStore } from "react";
-import { act, renderHook, waitFor } from "@testing-library/react";
-import {
-  encodeRecoveryKey,
-  OnlySignedDevicesIsolationMode,
-  VerificationPhase,
-  VerificationRequestEvent,
-} from "matrix-js-sdk/lib/crypto-api/index.js";
-import type {
-  CryptoCallbacks,
-  SecretStorageStatus,
-} from "matrix-js-sdk/lib/crypto-api/index.js";
+import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { MatrixSession } from "../../types";
 import type { MatrixClientFactory } from "./client";
-import type { MatrixCryptoLockProvider } from "./session";
-import {
-  MatrixClientRegistry,
-  MatrixClientSession,
-} from "./session";
+import { MatrixClientRegistry, MatrixClientSession } from "./session";
 
 const userA = "@u_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:localhost";
 const userB = "@u_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:localhost";
-const testLockProvider: MatrixCryptoLockProvider = async () => () => undefined;
-const fakeCrypto = {
-  setDeviceIsolationMode: vi.fn(),
-  getVersion: () => "Rust SDK test",
-  getOwnDeviceKeys: async () => ({
-    ed25519: "public-device-fingerprint",
-    curve25519: "public-identity-key",
-  }),
-  isCrossSigningReady: async () => false,
-  isSecretStorageReady: async () => false,
-  getSecretStorageStatus: async (): Promise<SecretStorageStatus> => ({
-    ready: false,
-    defaultKeyId: null,
-    secretStorageKeyValidityMap: {},
-  }),
-  getKeyBackupInfo: async () => null,
-  checkKeyBackupAndEnable: async () => null,
-  isKeyBackupTrusted: async () => ({ trusted: true }),
-  bootstrapSecretStorage: vi.fn(async () => undefined),
-  bootstrapCrossSigning: vi.fn(async () => undefined),
-  resetKeyBackup: vi.fn(async () => undefined),
-  userHasCrossSigningKeys: vi.fn(async () => false),
-  loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => undefined),
-  restoreKeyBackup: vi.fn(async () => ({ imported: 0, total: 0 })),
-  requestVerificationDM: vi.fn(),
-  getCrossSigningStatus: async () => ({
-    publicKeysOnDevice: false,
-    privateKeysInSecretStorage: false,
-    privateKeysCachedLocally: {
-      masterKey: false,
-      selfSigningKey: false,
-      userSigningKey: false,
-    },
-  }),
-};
 
-function matrixSession(
-  userId = userA,
-  deviceId = "DEVICE_A",
-  accessToken = "token-a",
-): MatrixSession {
-  return {
-    access_token: accessToken,
-    user_id: userId,
-    device_id: deviceId,
-    home_server: "localhost",
-    expires_in_ms: null,
-  };
+function matrixSession(userId = userA, deviceId = "DEVICE_A", accessToken = "token-a"): MatrixSession {
+  return { access_token: accessToken, user_id: userId, device_id: deviceId, home_server: "localhost", expires_in_ms: null };
 }
 
 type Listener = (...args: unknown[]) => void;
@@ -87,23 +27,14 @@ class FakeMatrixClient {
   private readonly handlers = new Map<string, Set<Listener>>();
   readonly startClient = vi.fn(async () => undefined);
   readonly stopClient = vi.fn();
+  readonly whoami = vi.fn(async () => ({ user_id: this.userId, device_id: this.deviceId }));
+  /** Any crypto call would be a regression: the session must never touch crypto. */
   readonly initRustCrypto = vi.fn(async () => undefined);
-  readonly queueToDevice = vi.fn(async () => undefined);
-  readonly whoami = vi.fn(async () => ({
-    user_id: this.userId,
-    device_id: this.deviceId,
-  }));
-  readonly secretStorage = {
-    getDefaultKeyId: vi.fn(async () => null),
-  };
-  cryptoCallbacks: CryptoCallbacks | undefined;
+  readonly getCrypto = vi.fn(() => undefined);
   rooms: Room[] = [];
+  options: IMatrixClientCreateOpts | undefined;
 
-  constructor(
-    private readonly userId: string,
-    private readonly deviceId: string,
-    private readonly cryptoApi: object = fakeCrypto,
-  ) {}
+  constructor(private readonly userId: string, private readonly deviceId: string) {}
 
   on(event: string, listener: Listener): this {
     const listeners = this.handlers.get(event) ?? new Set<Listener>();
@@ -111,63 +42,43 @@ class FakeMatrixClient {
     this.handlers.set(event, listeners);
     return this;
   }
-
   removeListener(event: string, listener: Listener): this {
     this.handlers.get(event)?.delete(listener);
     return this;
   }
-
   emit(event: string, ...args: unknown[]): void {
-    for (const listener of this.handlers.get(event) ?? []) {
-      listener(...args);
-    }
+    for (const listener of this.handlers.get(event) ?? []) listener(...args);
   }
-
   listenerCount(event: string): number {
     return this.handlers.get(event)?.size ?? 0;
   }
-
-  getUserId(): string {
-    return this.userId;
-  }
-
-  getDeviceId(): string {
-    return this.deviceId;
-  }
-
-  getCrypto() {
-    return this.cryptoApi;
-  }
-
-  getRooms(): Room[] {
-    return this.rooms;
-  }
-
-  getRoom(roomId: string): Room | null {
-    return this.rooms.find((candidate) => candidate.roomId === roomId) ?? null;
-  }
+  getUserId() { return this.userId; }
+  getDeviceId() { return this.deviceId; }
+  getRooms() { return this.rooms; }
+  getRoom(roomId: string) { return this.rooms.find((r) => r.roomId === roomId) ?? null; }
 }
 
 function factoryFor(client: FakeMatrixClient): MatrixClientFactory {
-  return (options: IMatrixClientCreateOpts) => {
-    client.cryptoCallbacks = options.cryptoCallbacks;
+  return (options) => {
+    client.options = options;
     return client as unknown as MatrixClient;
   };
 }
 
-function room(roomId: string, name: string): Room {
+function room(roomId: string, name: string, encrypted = false): Room {
   return {
     roomId,
     name,
     getMembers: () => [],
     getLiveTimeline: () => ({ getEvents: () => [] }),
     getMyMembership: () => "join",
-    getJoinedMembers: () => [],
     getMember: () => null,
-    hasEncryptionStateEvent: () => false,
+    hasEncryptionStateEvent: () => encrypted,
+    currentState: { getStateEvents: () => null },
     getUnreadNotificationCount: () => 0,
     getLastActiveTimestamp: () => 0,
     guessDMUserId: () => "",
+    getReadReceiptForUserId: () => null,
   } as unknown as Room;
 }
 
@@ -182,753 +93,128 @@ function liveMessage(eventId = "$live:localhost"): MatrixEvent {
   });
 }
 
-async function waitForStart(client: FakeMatrixClient): Promise<void> {
-  await waitFor(() => expect(client.startClient).toHaveBeenCalledTimes(1));
-}
+const waitForStart = (client: FakeMatrixClient) =>
+  waitFor(() => expect(client.startClient).toHaveBeenCalledTimes(1));
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function flushMicrotasks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-describe("Matrix client session lifecycle", () => {
-  it("queues an Olm acknowledgment only after a recipient decrypts an eligible message", async () => {
-    const encryptToDeviceMessages = vi.fn(async () => ({
-      eventType: "m.room.encrypted", batch: [{ userId: userA, deviceId: "DEVICE_A", payload: {} }],
-    }));
-    const crypto = {
-      ...fakeCrypto,
-      getUserDeviceInfo: vi.fn(async () => new Map([[userA, new Map([["DEVICE_A", {
-        deviceId: "DEVICE_A", verified: 1, getIdentityKey: () => "key",
-      }]])]])),
-      encryptToDeviceMessages,
-    };
-    const client = new FakeMatrixClient(userB, "DEVICE_B", crypto);
-    const event = new MatrixEvent({
-      event_id: "$encrypted:localhost", room_id: "!room:localhost", sender: userA,
-      type: "m.room.encrypted", content: { algorithm: "m.megolm.v1.aes-sha2" },
-    });
-    const joined = [{ userId: userA }, { userId: userB }];
-    client.rooms = [{
-      ...room("!room:localhost", "Alice"),
-      getJoinedMembers: () => joined,
-      hasEncryptionStateEvent: () => true,
-      getLiveTimeline: () => ({ getEvents: () => [event] }),
-    } as unknown as Room];
-    const manager = new MatrixClientSession(matrixSession(userB, "DEVICE_B"), userB,
-      factoryFor(client), testLockProvider);
-    await waitForStart(client);
-    client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    client.emit(ClientEvent.Event, event);
-    expect(encryptToDeviceMessages).not.toHaveBeenCalled();
-    vi.spyOn(event, "getClearContent").mockReturnValue({ msgtype: "m.text", body: "hello" });
-    vi.spyOn(event, "getType").mockReturnValue("m.room.message");
-    client.emit(ClientEvent.Event, event);
-    expect(encryptToDeviceMessages).not.toHaveBeenCalled();
-    manager.setAcceptedContacts(new Set([userA]));
-    await waitFor(() => expect(client.queueToDevice).toHaveBeenCalledTimes(1));
-    expect(encryptToDeviceMessages).toHaveBeenCalledWith(
-      "org.recruitable.chat.delivery_ack.v1",
-      [{ userId: userA, deviceId: "DEVICE_A" }],
-      { version: 1, roomId: "!room:localhost", eventId: "$encrypted:localhost", deviceId: "DEVICE_B" },
-    );
-    client.emit(ClientEvent.Event, event);
-    expect(client.queueToDevice).toHaveBeenCalledTimes(1);
-    manager.dispose();
-    expect(client.listenerCount(ClientEvent.ReceivedToDeviceMessage)).toBe(0);
-  });
-  it("accepts only verified recipient-device acknowledgments for its sent message", async () => {
+describe("Matrix client session lifecycle (plaintext)", () => {
+  it("starts sync without initializing any crypto", async () => {
     const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const original = new MatrixEvent({
-      event_id: "$sent:localhost", room_id: "!room:localhost", sender: userA,
-      type: "m.room.encrypted", content: { algorithm: "m.megolm.v1.aes-sha2" },
-    });
-    vi.spyOn(original, "getClearContent").mockReturnValue({ msgtype: "m.text", body: "hello" });
-    vi.spyOn(original, "getType").mockReturnValue("m.room.message");
-    const joined = [{ userId: userA }, { userId: userB }];
-    client.rooms = [{
-      ...room("!room:localhost", "Bob"),
-      getMembers: () => [{ userId: userB, membership: "join", name: "Bob", events: {} }],
-      getJoinedMembers: () => joined,
-      hasEncryptionStateEvent: () => true,
-      getLiveTimeline: () => ({ getEvents: () => [original] }),
-      findEventById: (id: string) => id === "$sent:localhost" ? original : undefined,
-    } as unknown as Room];
-    const manager = new MatrixClientSession(matrixSession(), userA,
-      factoryFor(client), testLockProvider);
-    await waitForStart(client);
-    client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    const acknowledgment = (overrides: Record<string, unknown> = {}) => ({
-      message: {
-        type: "org.recruitable.chat.delivery_ack.v1", sender: userB,
-        content: { version: 1, roomId: "!room:localhost", eventId: "$sent:localhost", deviceId: "DEVICE_B" },
-      },
-      encryptionInfo: { sender: userB, senderDevice: "DEVICE_B", senderVerified: true },
-      ...overrides,
-    });
-    const delivery = () => manager.getSnapshot().rooms[0].messages[0].delivery;
-    expect(delivery()).toBe("sent");
-    manager.setAcceptedContacts(new Set());
-    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment());
-    await flushMicrotasks();
-    expect(delivery()).toBe("sent");
-    manager.setAcceptedContacts(new Set([userB]));
-    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment({ encryptionInfo: null }));
-    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment({
-      encryptionInfo: { sender: userB, senderDevice: "DEVICE_B", senderVerified: false },
-    }));
-    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment({
-      message: { ...acknowledgment().message, content: { version: 1, roomId: "!room:localhost", eventId: "$wrong:localhost", deviceId: "DEVICE_B" } },
-    }));
-    await flushMicrotasks();
-    expect(delivery()).toBe("sent");
-    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment());
-    await waitFor(() => expect(delivery()).toBe("delivered"));
-    const previousRooms = manager.getSnapshot().rooms;
-    client.emit(ClientEvent.ReceivedToDeviceMessage, acknowledgment());
-    await flushMicrotasks();
-    expect(manager.getSnapshot().rooms).toBe(previousRooms);
-    manager.dispose();
-  });
-  it("automatically initializes cross-signing for a new account without creating a recovery backup", async () => {
-    let crossSigningReady = false;
-    const crypto = {
-      ...fakeCrypto,
-      isCrossSigningReady: vi.fn(async () => crossSigningReady),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: false,
-        defaultKeyId: null,
-        secretStorageKeyValidityMap: {},
-      })),
-      getKeyBackupInfo: vi.fn(async () => null),
-      getCrossSigningStatus: vi.fn(async () => ({
-        publicKeysOnDevice: crossSigningReady,
-        privateKeysInSecretStorage: false,
-        privateKeysCachedLocally: {
-          masterKey: crossSigningReady,
-          selfSigningKey: crossSigningReady,
-          userSigningKey: crossSigningReady,
-        },
-      })),
-      bootstrapCrossSigning: vi.fn(async (options: {
-        authUploadDeviceSigningKeys: (
-          makeRequest: (request: null) => Promise<void>,
-        ) => Promise<void>;
-      }) => {
-        await options.authUploadDeviceSigningKeys(async () => undefined);
-        crossSigningReady = true;
-      }),
-    };
-    const client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-      true,
-    );
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
     await waitForStart(client);
 
-    act(() => client.emit(ClientEvent.Sync, SyncState.Prepared, null, {}));
-    await waitFor(() =>
-      expect(manager.getSnapshot()).toMatchObject({
-        cryptoOnboardingStatus: "ready",
-        crossSigningReady: true,
-        secretStorageReady: false,
-        keyBackupStatus: "not_configured",
-      }),
-    );
-
-    expect(client.initRustCrypto).toHaveBeenCalledTimes(1);
-    expect(crypto.bootstrapCrossSigning).toHaveBeenCalledOnce();
-    expect(crypto.getSecretStorageStatus).toHaveBeenCalled();
-    expect(crypto.getKeyBackupInfo).toHaveBeenCalled();
-    expect(crypto.bootstrapSecretStorage).not.toHaveBeenCalled();
-    expect(crypto.resetKeyBackup).not.toHaveBeenCalled();
-    manager.dispose();
-  });
-
-  it("does not replace a detected identity even when new-account setup is marked", async () => {
-    const crypto = {
-      ...fakeCrypto,
-      getCrossSigningStatus: async () => ({
-        publicKeysOnDevice: true,
-        privateKeysInSecretStorage: false,
-        privateKeysCachedLocally: {
-          masterKey: false,
-          selfSigningKey: false,
-          userSigningKey: false,
-        },
-      }),
-      userHasCrossSigningKeys: vi.fn(async () => true),
-      bootstrapCrossSigning: vi.fn(),
-    };
-    const client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-      true,
-    );
-    await waitForStart(client);
-
-    act(() => client.emit(ClientEvent.Sync, SyncState.Prepared, null, {}));
-    await waitFor(() =>
-      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("incomplete"),
-    );
-
-    expect(manager.getSnapshot()).toMatchObject({
-      cryptoOnboardingStatus: "incomplete",
-      keyBackupStatus: "not_configured",
-    });
-    expect(crypto.userHasCrossSigningKeys).toHaveBeenCalledWith(userA, true);
-    expect(crypto.bootstrapCrossSigning).not.toHaveBeenCalled();
-    manager.dispose();
-  });
-
-  it("does not bootstrap an unconfigured existing account without a registration signal", async () => {
-    const crypto = {
-      ...fakeCrypto,
-      userHasCrossSigningKeys: vi.fn(async () => false),
-      bootstrapCrossSigning: vi.fn(),
-    };
-    const client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-
-    act(() => client.emit(ClientEvent.Sync, SyncState.Prepared, null, {}));
-    await waitFor(() =>
-      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("incomplete"),
-    );
-
-    expect(crypto.bootstrapCrossSigning).not.toHaveBeenCalled();
-    expect(manager.getSnapshot().cryptoError).toMatch(
-      /existing accounts are not assigned a replacement identity/i,
-    );
-    manager.dispose();
-  });
-
-  it("retries cross-signing bootstrap after a transient failure for a new account", async () => {
-    let crossSigningReady = false;
-    let failOnce = true;
-    const crypto = {
-      ...fakeCrypto,
-      isCrossSigningReady: vi.fn(async () => crossSigningReady),
-      bootstrapCrossSigning: vi.fn(async () => {
-        if (failOnce) {
-          failOnce = false;
-          throw new Error("temporary upload failure");
-        }
-        crossSigningReady = true;
-      }),
-      getCrossSigningStatus: vi.fn(async () => ({
-        publicKeysOnDevice: crossSigningReady,
-        privateKeysInSecretStorage: false,
-        privateKeysCachedLocally: {
-          masterKey: crossSigningReady,
-          selfSigningKey: crossSigningReady,
-          userSigningKey: crossSigningReady,
-        },
-      })),
-    };
-    const client = new FakeMatrixClient(userA, "DEVICE_A", crypto);
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-      true,
-    );
-    await waitForStart(client);
-
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-    await waitFor(() =>
-      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("incomplete"),
-    );
-    expect(crypto.bootstrapCrossSigning).toHaveBeenCalledOnce();
-    expect(manager.getSnapshot()).toMatchObject({
-      cryptoOnboardingStatus: "incomplete",
-      keyBackupStatus: "not_configured",
-    });
-
-    await manager.retryCryptoOnboarding();
-
-    expect(crypto.bootstrapCrossSigning).toHaveBeenCalledTimes(2);
-    expect(manager.getSnapshot()).toMatchObject({
-      cryptoOnboardingStatus: "ready",
-      crossSigningReady: true,
-      keyBackupStatus: "not_configured",
-    });
-    manager.dispose();
-  });
-
-  it("restores existing encryption on a new device without generating account keys", async () => {
-    const recoveryBytes = new Uint8Array(32).fill(77);
-    const recoveryKey = encodeRecoveryKey(recoveryBytes);
-    if (!recoveryKey) throw new Error("The test recovery key was not encoded.");
-    const backupInfo = { version: "existing-backup" };
-    let crossSigningReady = false;
-    const createRecoveryKey = vi.fn();
-    const crypto = {
-      ...fakeCrypto,
-      isCrossSigningReady: vi.fn(async () => crossSigningReady),
-      isSecretStorageReady: vi.fn(async () => true),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: false,
-        defaultKeyId: "existing-secret-storage-key",
-        secretStorageKeyValidityMap: {},
-      })),
-      getKeyBackupInfo: vi.fn(async () => backupInfo as never),
-      checkKeyBackupAndEnable: vi.fn(async () => ({
-        backupInfo,
-        trustInfo: { trusted: true },
-      }) as never),
-      getCrossSigningStatus: vi.fn(async () => ({
-        publicKeysOnDevice: true,
-        privateKeysInSecretStorage: true,
-        privateKeysCachedLocally: {
-          masterKey: false,
-          selfSigningKey: false,
-          userSigningKey: false,
-        },
-      })),
-      createRecoveryKeyFromPassphrase: createRecoveryKey,
-      bootstrapCrossSigning: vi.fn(async () => {
-        crossSigningReady = true;
-      }),
-      loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => undefined),
-      restoreKeyBackup: vi.fn(async () => ({ imported: 4, total: 4 })),
-    };
-    const isolationMode = vi.fn();
-    const client = new FakeMatrixClient(userA, "DEVICE_NEW", {
-      ...crypto,
-      setDeviceIsolationMode: isolationMode,
-    });
-    const manager = new MatrixClientSession(
-      matrixSession(userA, "DEVICE_NEW", "new-device-token"),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-    await waitFor(() =>
-      expect(manager.getSnapshot().cryptoOnboardingStatus).toBe(
-        "restore_encryption",
-      ),
-    );
-
-    const restored = await manager.restoreFromRecoveryKey(recoveryKey);
-
-    expect(restored).toEqual({ imported: 4, total: 4 });
-    expect(createRecoveryKey).not.toHaveBeenCalled();
-    expect(crypto.bootstrapCrossSigning).toHaveBeenCalledTimes(1);
-    expect(crypto.loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledOnce();
-    expect(crypto.restoreKeyBackup).toHaveBeenCalledOnce();
-    expect(manager.getSnapshot().cryptoOnboardingStatus).toBe("ready");
-    expect(isolationMode).toHaveBeenCalledWith(
-      expect.any(OnlySignedDevicesIsolationMode),
-    );
-    manager.dispose();
-  });
-
-  it("waits for PREPARED before marking the first sync complete", async () => {
-    const registry = new MatrixClientRegistry(testLockProvider);
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const lease = registry.acquire(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-    );
-
-    expect(lease.manager.getSnapshot()).toMatchObject({
-      status: "connecting",
-      initialSyncComplete: false,
-      rooms: [],
-    });
-    await waitForStart(client);
-    expect(client.startClient).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-    expect(lease.manager.getSnapshot()).toMatchObject({
-      status: "connected",
-      initialSyncComplete: true,
-    });
-
-    lease.release();
-    await flushMicrotasks();
-  });
-
-  it("reports reconnecting and returns to connected when SDK sync resumes", async () => {
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-      client.emit(
-        ClientEvent.Sync,
-        SyncState.Reconnecting,
-        SyncState.Syncing,
-        {},
-      );
-    });
-    expect(manager.getSnapshot().status).toBe("reconnecting");
-
-    act(() => {
-      client.emit(
-        ClientEvent.Sync,
-        SyncState.Syncing,
-        SyncState.Reconnecting,
-        { catchingUp: false },
-      );
-    });
-    expect(manager.getSnapshot()).toMatchObject({
-      status: "connected",
-      initialSyncComplete: true,
-    });
-    manager.dispose();
-  });
-
-  it("deduplicates live timeline event IDs and updates the room snapshot", async () => {
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const testRoom = room("!room:localhost", "Live room");
-    client.rooms = [testRoom];
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-
-    const message = liveMessage();
-    act(() => {
-      client.emit(ClientEvent.Event, message);
-      client.emit(RoomEvent.Timeline, message, testRoom, false, false, {});
-    });
-
-    expect(manager.getSnapshot().recentEvents).toEqual([
-      {
-        eventId: "$live:localhost",
-        roomId: "!room:localhost",
-        senderId: userB,
-        eventType: "m.room.message",
-        timestamp: 1_750_000_000_000,
-      },
-    ]);
-    expect(manager.getSnapshot().rooms.map((item) => item.id)).toEqual([
-      "!room:localhost",
-    ]);
-
-    manager.dispose();
-  });
-
-  it("uses in-room verification only for a joined one-to-one conversation", async () => {
-    const roomId = "!direct:localhost";
-    const request = {
-      transactionId: "verification-transaction",
-      roomId,
-      initiatedByMe: true,
-      otherUserId: userB,
-      otherDeviceId: undefined,
-      phase: VerificationPhase.Requested,
-      verifier: undefined,
-      on: vi.fn(),
-      removeListener: vi.fn(),
-    };
-    const testRoom = {
-      ...room(roomId, "Direct room"),
-      getJoinedMembers: () => [
-        { userId: userA },
-        { userId: userB },
-      ],
-      getMember: (userId: string) =>
-        userId === userB ? { membership: "join" } : null,
-    } as unknown as Room;
-    const groupRoom = {
-      ...testRoom,
-      getJoinedMembers: () => [
-        { userId: userA },
-        { userId: userB },
-        { userId: "@u_cccccccccccccccccccccccccccccccc:localhost" },
-      ],
-    } as unknown as Room;
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    client.rooms = [groupRoom];
-    vi.mocked(fakeCrypto.requestVerificationDM).mockResolvedValueOnce(
-      request as never,
-    );
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-
-    await expect(manager.requestVerificationDM(userB, roomId)).rejects.toThrow(
-      /one-to-one conversation/,
-    );
-    expect(fakeCrypto.requestVerificationDM).not.toHaveBeenCalled();
-
-    client.rooms = [testRoom];
-    await manager.requestVerificationDM(userB, roomId);
-    expect(fakeCrypto.requestVerificationDM).toHaveBeenCalledWith(userB, roomId);
-    expect(manager.getSnapshot().verification).toMatchObject({
-      id: "verification-transaction",
-      userId: userB,
-      initiatedByMe: true,
-      state: "requested",
-    });
-
-    manager.dispose();
-    expect(request.on).toHaveBeenCalledWith(
-      VerificationRequestEvent.Change,
-      expect.any(Function),
-    );
-  });
-
-  it("rejects malformed recovery keys before touching secret storage", async () => {
-    const secretStorageStatus = vi.spyOn(fakeCrypto, "getSecretStorageStatus");
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-
-    await expect(
-      manager.restoreFromRecoveryKey("not-a-Matrix-recovery-key"),
-    ).rejects.toThrow(/recovery key format is invalid/);
-    expect(secretStorageStatus).not.toHaveBeenCalled();
-    manager.dispose();
-    secretStorageStatus.mockRestore();
-  });
-
-  it("fails recovery safely when the account has no server-side backup", async () => {
-    const recoveryKey = encodeRecoveryKey(new Uint8Array(32).fill(23));
-    expect(recoveryKey).toBeTruthy();
-    const secretStorageStatus = vi
-      .spyOn(fakeCrypto, "getSecretStorageStatus")
-      .mockResolvedValue({
-        ready: true,
-        defaultKeyId: "secret-storage-key",
-        secretStorageKeyValidityMap: {},
-      });
-    const crossSigningStatus = vi
-      .spyOn(fakeCrypto, "getCrossSigningStatus")
-      .mockResolvedValue({
-        publicKeysOnDevice: false,
-        privateKeysInSecretStorage: false,
-        privateKeysCachedLocally: {
-          masterKey: false,
-          selfSigningKey: false,
-          userSigningKey: false,
-        },
-      });
-    const backupInfo = vi
-      .spyOn(fakeCrypto, "getKeyBackupInfo")
-      .mockResolvedValue(null);
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      testLockProvider,
-    );
-    await waitForStart(client);
-
-    await expect(
-      manager.restoreFromRecoveryKey(recoveryKey!),
-    ).rejects.toThrow(/Check the recovery key and backup status/);
-    expect(secretStorageStatus).toHaveBeenCalled();
-    expect(crossSigningStatus).toHaveBeenCalled();
-    expect(backupInfo).toHaveBeenCalled();
-    manager.dispose();
-    secretStorageStatus.mockRestore();
-    crossSigningStatus.mockRestore();
-    backupInfo.mockRestore();
-  });
-
-  it("shares one client across StrictMode-style acquire/release and removes listeners on final release", async () => {
-    const registry = new MatrixClientRegistry(testLockProvider);
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    const factory = vi.fn(factoryFor(client));
-    const first = registry.acquire(matrixSession(), userA, factory);
-    first.release();
-    const second = registry.acquire(matrixSession(), userA, factory);
-
-    await waitForStart(client);
-    await flushMicrotasks();
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(client.listenerCount(RoomEvent.LocalEchoUpdated)).toBe(1);
-    expect(client.stopClient).not.toHaveBeenCalled();
-
-    let renderCount = 0;
-    const rendered = renderHook(() => {
-      renderCount += 1;
-      return useSyncExternalStore(
-        second.manager.subscribe,
-        second.manager.getSnapshot,
-      );
-    });
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-    expect(renderCount).toBeGreaterThan(1);
-
-    rendered.unmount();
-    const countAfterUnmount = renderCount;
-    act(() => {
-      client.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing, {});
-    });
-    expect(renderCount).toBe(countAfterUnmount);
-
-    second.release();
-    await flushMicrotasks();
-    expect(client.stopClient).toHaveBeenCalledTimes(1);
-    expect(client.listenerCount(ClientEvent.Sync)).toBe(0);
-    expect(client.listenerCount(RoomEvent.LocalEchoUpdated)).toBe(0);
-  });
-
-  it("isolates rooms when switching accounts", async () => {
-    const registry = new MatrixClientRegistry(testLockProvider);
-    const clientA = new FakeMatrixClient(userA, "DEVICE_A");
-    clientA.rooms = [room("!private-a:localhost", "A private room")];
-    const leaseA = registry.acquire(
-      matrixSession(),
-      userA,
-      factoryFor(clientA),
-    );
-    await waitForStart(clientA);
-    act(() => {
-      clientA.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-    expect(leaseA.manager.getSnapshot().rooms[0]?.id).toBe(
-      "!private-a:localhost",
-    );
-
-    const clientB = new FakeMatrixClient(userB, "DEVICE_B");
-    clientB.rooms = [room("!private-b:localhost", "B private room")];
-    const leaseB = registry.acquire(
-      matrixSession(userB, "DEVICE_B", "token-b"),
-      userB,
-      factoryFor(clientB),
-    );
-
-    expect(clientA.stopClient).toHaveBeenCalledTimes(1);
-    expect(leaseB.manager.getSnapshot().rooms).toEqual([]);
-    await waitForStart(clientB);
-    act(() => {
-      clientB.emit(ClientEvent.Sync, SyncState.Prepared, null, {});
-    });
-    expect(leaseB.manager.getSnapshot().rooms.map((item) => item.id)).toEqual([
-      "!private-b:localhost",
-    ]);
-
-    leaseA.release();
-    leaseB.release();
-    await flushMicrotasks();
-  });
-
-  it("stops instead of retrying when Synapse rejects an expired token", async () => {
-    const registry = new MatrixClientRegistry(testLockProvider);
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    client.whoami.mockRejectedValue({ httpStatus: 401 });
-    const lease = registry.acquire(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-    );
-
-    await waitFor(() =>
-      expect(lease.manager.getSnapshot()).toMatchObject({
-        status: "error",
-        authenticationError: true,
-      }),
-    );
-    expect(client.startClient).not.toHaveBeenCalled();
-    expect(client.stopClient).toHaveBeenCalledTimes(1);
-    lease.release();
-    await flushMicrotasks();
-  });
-
-  it("holds the crypto-store lock until an in-flight Rust initialization settles after disposal", async () => {
-    let finishInitialization!: () => void;
-    const initialization = new Promise<undefined>((resolve) => {
-      finishInitialization = () => resolve(undefined);
-    });
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    client.initRustCrypto.mockReturnValue(initialization);
-    const releaseLock = vi.fn();
-    const lockProvider: MatrixCryptoLockProvider = async () => releaseLock;
-    const manager = new MatrixClientSession(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-      lockProvider,
-    );
-
-    await waitFor(() =>
-      expect(client.initRustCrypto).toHaveBeenCalledTimes(1),
-    );
-    manager.dispose();
-    expect(releaseLock).not.toHaveBeenCalled();
-
-    finishInitialization();
-    await waitFor(() => expect(releaseLock).toHaveBeenCalledTimes(1));
-  });
-
-  it("keeps an identity mismatch out of the syncing state", async () => {
-    const registry = new MatrixClientRegistry(testLockProvider);
-    const client = new FakeMatrixClient(userA, "DEVICE_A");
-    client.whoami.mockResolvedValue({
-      user_id: userB,
-      device_id: "DEVICE_A",
-    });
-    const lease = registry.acquire(
-      matrixSession(),
-      userA,
-      factoryFor(client),
-    );
-
-    await waitFor(() =>
-      expect(lease.manager.getSnapshot()).toMatchObject({
-        status: "error",
-        initialSyncComplete: false,
-        cryptoStatus: "error",
-        cryptoError: null,
-      }),
-    );
-    expect(lease.manager.getSnapshot().error).toContain(
-      "does not match the FastAPI session",
-    );
     expect(client.initRustCrypto).not.toHaveBeenCalled();
+    expect(client.getCrypto).not.toHaveBeenCalled();
+    expect(client.options).not.toHaveProperty("cryptoCallbacks");
+    expect(client.options).not.toHaveProperty("verificationMethods");
+    expect(client.options).toMatchObject({ accessToken: "token-a", userId: userA, deviceId: "DEVICE_A" });
+    expect(client.startClient).toHaveBeenCalledWith({ initialSyncLimit: 30, pollTimeout: 30_000 });
+    manager.dispose();
+  });
+
+  it("publishes rooms after the first sync and hides retired encrypted rooms", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    client.rooms = [room("!plain:localhost", "Plain"), room("!old:localhost", "Old", true)];
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+
+    expect(manager.getSnapshot().status).toBe("connecting");
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+    const snapshot = manager.getSnapshot();
+    expect(snapshot.status).toBe("connected");
+    expect(snapshot.initialSyncComplete).toBe(true);
+    expect(snapshot.rooms.map((r) => r.roomId)).toEqual(["!plain:localhost"]);
+    expect(snapshot.legacyRoomIds).toEqual(["!old:localhost"]);
+    manager.dispose();
+  });
+
+  it("refreshes rooms on live events and records only event metadata", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+
+    client.rooms = [room("!room:localhost", "New room")];
+    client.emit(RoomEvent.Timeline, liveMessage());
+    await flush();
+
+    expect(manager.getSnapshot().rooms.map((r) => r.roomId)).toEqual(["!room:localhost"]);
+    expect(manager.getSnapshot().recentEvents).toEqual([
+      { eventId: "$live:localhost", roomId: "!room:localhost", senderId: userB, eventType: "m.room.message", timestamp: 1_750_000_000_000 },
+    ]);
+    manager.dispose();
+  });
+
+  it("reports reconnection and recovers", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    client.emit(ClientEvent.Sync, SyncState.Prepared, null);
+
+    client.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
+    expect(manager.getSnapshot().status).toBe("reconnecting");
+    client.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Reconnecting);
+    expect(manager.getSnapshot().status).toBe("connected");
+    manager.dispose();
+  });
+
+  it("flags expired Matrix sessions as an authentication error and stops sync", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+
+    client.emit(ClientEvent.Sync, SyncState.Error, null, { error: Object.assign(new Error("x"), { errcode: "M_UNKNOWN_TOKEN" }) });
+    expect(manager.getSnapshot()).toMatchObject({ status: "error", authenticationError: true });
+    expect(client.stopClient).toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("refuses a Matrix identity that differs from the application user", async () => {
+    const client = new FakeMatrixClient(userB, "DEVICE_A");
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitFor(() => expect(manager.getSnapshot().status).toBe("error"));
     expect(client.startClient).not.toHaveBeenCalled();
-    lease.release();
-    await flushMicrotasks();
+    manager.dispose();
+  });
+
+  it("detaches every listener and stops the client on dispose", async () => {
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const manager = new MatrixClientSession(matrixSession(), userA, factoryFor(client));
+    await waitForStart(client);
+    expect(client.listenerCount(ClientEvent.Sync)).toBe(1);
+
+    manager.dispose();
+    expect(client.stopClient).toHaveBeenCalled();
+    expect(client.listenerCount(ClientEvent.Sync)).toBe(0);
+    expect(client.listenerCount(RoomEvent.Timeline)).toBe(0);
+    expect(manager.getSnapshot().status).toBe("disabled");
+  });
+});
+
+describe("Matrix client registry", () => {
+  it("shares one session per identity and replaces it for another user", async () => {
+    const registry = new MatrixClientRegistry();
+    const clientA = new FakeMatrixClient(userA, "DEVICE_A");
+    const clientB = new FakeMatrixClient(userB, "DEVICE_B");
+
+    const first = registry.acquire(matrixSession(), userA, factoryFor(clientA));
+    const second = registry.acquire(matrixSession(), userA, factoryFor(clientA));
+    expect(second.manager).toBe(first.manager);
+
+    const other = registry.acquire(matrixSession(userB, "DEVICE_B", "token-b"), userB, factoryFor(clientB));
+    expect(other.manager).not.toBe(first.manager);
+    expect(first.manager.getSnapshot().status).toBe("disabled");
+    registry.stop();
+  });
+
+  it("only stops the session that matches the given credentials", async () => {
+    const registry = new MatrixClientRegistry();
+    const client = new FakeMatrixClient(userA, "DEVICE_A");
+    const lease = registry.acquire(matrixSession(), userA, factoryFor(client));
+
+    registry.stop(matrixSession(userB, "DEVICE_B", "token-b"));
+    expect(lease.manager.getSnapshot().status).not.toBe("disabled");
+    registry.stop(matrixSession());
+    expect(lease.manager.getSnapshot().status).toBe("disabled");
   });
 });

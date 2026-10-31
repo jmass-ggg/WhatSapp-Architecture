@@ -85,17 +85,16 @@ describe("Matrix event conversion", () => {
       .toBeUndefined();
   });
 
-  it("keeps an encrypted outgoing local echo readable without exposing ciphertext", () => {
+  it("maps an outgoing local echo as a sending plaintext message", () => {
     const outgoing = new MatrixEvent({
-      event_id: "~encrypted", room_id: "!room:localhost", sender: "@self:localhost",
-      type: "m.room.message", content: { msgtype: "m.text", body: "Secret" },
+      event_id: "~local", room_id: "!room:localhost", sender: "@self:localhost",
+      type: "m.room.message", content: { msgtype: "m.text", body: "Hello" },
     });
-    outgoing.setStatus(EventStatus.ENCRYPTING);
-    outgoing.makeEncrypted("m.room.encrypted", { ciphertext: "ciphertext" }, "curve", "ed");
+    outgoing.setStatus(EventStatus.SENDING);
     const message = messageFromMatrixEvent(outgoing, "!room:localhost", "@self:localhost");
-    expect(message?.text).toBe("Secret");
+    expect(message?.text).toBe("Hello");
     expect(message?.delivery).toBe("sending");
-    expect(message?.matrix?.eventType).toBe("m.room.encrypted");
+    expect(message?.matrix?.eventType).toBe("m.room.message");
   });
   it("keeps plain text as text and ignores untrusted formatted HTML", () => {
     const message = messageFromMatrixEvent(
@@ -118,47 +117,15 @@ describe("Matrix event conversion", () => {
     });
   });
 
-  it("does not interpret ciphertext as plaintext when crypto is not enabled", () => {
-    const message = messageFromMatrixEvent(
+  it("never surfaces ciphertext from retired encrypted events", () => {
+    expect(messageFromMatrixEvent(
       event("m.room.encrypted", {
         ciphertext: "untrusted encrypted payload",
         algorithm: "m.megolm.v1.aes-sha2",
       }),
       "!room:localhost",
       "@self:localhost",
-    );
-
-    expect(message?.text).toContain("waiting for a room key");
-    expect(message?.text).not.toContain("untrusted encrypted payload");
-    expect(message?.matrix?.eventType).toBe("m.room.encrypted");
-    expect(message?.matrix?.encryptionStatus).toBe("pending");
-  });
-
-  it("shows a sanitized failure when the SDK supplies its m.bad.encrypted clear event", () => {
-    const failedEvent = {
-      getWireType: () => "m.room.encrypted",
-      getType: () => "m.room.message",
-      getSender: () => "@other:localhost",
-      getDate: () => new Date(1_750_000_000_000),
-      getTs: () => 1_750_000_000_000,
-      getId: () => "$failed:localhost",
-      isEncrypted: () => true,
-      isDecryptionFailure: () => true,
-      getClearContent: () => ({
-        msgtype: "m.bad.encrypted",
-        body: "** Unable to decrypt: sensitive crypto details **",
-      }),
-    } as unknown as MatrixEvent;
-
-    const message = messageFromMatrixEvent(
-      failedEvent,
-      "!room:localhost",
-      "@self:localhost",
-    );
-
-    expect(message?.text).toBe("Unable to decrypt this encrypted message.");
-    expect(message?.text).not.toContain("sensitive crypto details");
-    expect(message?.matrix?.encryptionStatus).toBe("failed");
+    )).toBeNull();
   });
 
   it("ignores unsupported and malformed room events", () => {

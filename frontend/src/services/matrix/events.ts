@@ -22,7 +22,6 @@ function outgoingDelivery(event: MatrixEvent): Message["delivery"] {
       return "failed";
     case EventStatus.CANCELLED:
       return "cancelled";
-    case EventStatus.ENCRYPTING:
     case EventStatus.QUEUED:
     case EventStatus.SENDING:
       return "sending";
@@ -54,35 +53,10 @@ export function messageFromMatrixEvent(
       : undefined;
   const eventId = event.getId();
 
-  const encrypted = wireType === "m.room.encrypted" || event.isEncrypted();
-  const clearContent = encrypted ? event.getClearContent() : null;
+  // Retired encrypted events are never surfaced as messages.
+  if (wireType !== "m.room.message" || eventType !== "m.room.message") return null;
 
-  if (encrypted && (!clearContent || event.isDecryptionFailure())) {
-    const failed = event.isDecryptionFailure();
-    return {
-      id: eventId ?? `encrypted-${senderId}-${event.getTs()}`,
-      sender: senderId === ownUserId ? "me" : "them",
-      senderName: undefined,
-      text: failed
-        ? "Unable to decrypt this encrypted message."
-        : "Encrypted message · waiting for a room key.",
-      sentAt,
-      delivery: senderId === ownUserId ? outgoingDelivery(event) : "sent",
-      matrix: {
-        eventId: eventId ?? "",
-        roomId,
-        eventType: wireType,
-        senderId,
-        encryptionStatus: failed ? "failed" : "pending",
-      },
-    };
-  }
-
-  const clearType = encrypted ? eventType : wireType;
-  if (clearType !== "m.room.message") return null;
-
-  const content = (clearContent ??
-    event.getContent<Record<string, unknown>>()) as Record<string, unknown>;
+  const content = event.getContent<Record<string, unknown>>() as Record<string, unknown>;
   const messageType =
     typeof content.msgtype === "string" ? content.msgtype : "";
   const body = typeof content.body === "string" ? content.body : "";
@@ -127,7 +101,6 @@ export function messageFromMatrixEvent(
       roomId,
       eventType: wireType,
       senderId,
-      ...(encrypted ? { encryptionStatus: "decrypted" as const } : {}),
     },
   };
 }

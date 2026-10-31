@@ -1,5 +1,4 @@
 import type { IMatrixClientCreateOpts, MatrixClient } from "matrix-js-sdk";
-import type { CryptoCallbacks } from "matrix-js-sdk/lib/crypto-api/index.js";
 
 import type { MatrixSession } from "../../types";
 
@@ -100,7 +99,6 @@ export function createAuthenticatedMatrixClient(
   session: MatrixSession | null | undefined,
   expectedUserId: string,
   factory?: MatrixClientFactory,
-  cryptoCallbacks?: CryptoCallbacks,
 ): Promise<MatrixClient> {
   validateMatrixSession(session, expectedUserId);
   const baseUrl = getMatrixHomeserverUrl();
@@ -112,14 +110,10 @@ export function createAuthenticatedMatrixClient(
       userId: session.user_id,
       deviceId: session.device_id,
       timelineSupport: true,
-      // Keep sync responses in memory. Rust crypto uses its separately
-      // namespaced IndexedDB store, keyed by the verified user and device.
+      // Keep sync responses in memory. No crypto store is created.
       store: new sdk.MemoryStore(),
-      // Matrix SDK debug logs can include device key material and event
-      // metadata. Surface sanitized state in the UI instead of logging SDK data.
+      // Matrix SDK logs can include event metadata; surface sanitized state in the UI instead.
       logger: silentSdkLogger,
-      verificationMethods: ["m.sas.v1"],
-      ...(cryptoCallbacks ? { cryptoCallbacks } : {}),
     };
     return factory ? factory(options) : sdk.createClient(options);
   });

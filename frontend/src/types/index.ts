@@ -77,7 +77,6 @@ export interface Attachment {
   kind: "image" | "file";
   url?: string;
   mediaUri?: string;
-  demoOnly?: boolean;
 }
 
 export interface Message {
@@ -86,7 +85,7 @@ export interface Message {
   senderName?: string;
   text: string;
   sentAt?: Date;
-  delivery: "sending" | "sent" | "delivered" | "read" | "failed" | "cancelled";
+  delivery: "sending" | "sent" | "read" | "failed" | "cancelled";
   readAt?: Date;
   attachment?: Attachment;
   replyTo?: {
@@ -103,7 +102,6 @@ export interface Message {
     roomId: string;
     eventType: string;
     senderId: string;
-    encryptionStatus?: "decrypted" | "pending" | "failed";
   };
 }
 
@@ -124,14 +122,12 @@ export interface Conversation {
   unreadCount: number;
   messages: Message[];
   bio?: string;
-  isDemo?: boolean;
   isGroup?: boolean;
   isInvited?: boolean;
-  isEncrypted?: boolean;
   roomId?: string;
   contactUserId?: string;
   connectionUserId?: string;
   connectionAllowed?: boolean;
 }
 
-export type AuthMode = "live" | "demo";
+export type AuthMode = "live";

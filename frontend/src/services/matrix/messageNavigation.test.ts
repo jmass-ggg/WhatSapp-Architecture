@@ -45,7 +45,6 @@ function setup(target?: MatrixEvent) {
   } as unknown as Room;
   const client = {
     getUserId: () => "@self:localhost",
-    decryptEventIfNeeded: vi.fn().mockResolvedValue(undefined),
     fetchRoomEvent: vi.fn(async () => target?.event ?? {}),
     getEventMapper: vi.fn(() => (raw: Record<string, unknown>) =>
       target ?? new MatrixEvent(raw as never)),
@@ -134,19 +133,14 @@ describe("Matrix message navigation", () => {
     )).rejects.toThrow(/deleted or redacted/i);
   });
 
-  it("does not expose encrypted content when local decryption is unavailable", async () => {
+  it("does not expose ciphertext from a retired encrypted event", async () => {
     const encrypted = event("$encrypted", "m.room.encrypted", {
       algorithm: "m.megolm.v1.aes-sha2",
       ciphertext: "ciphertext-must-not-be-rendered",
     });
     const fixture = setup(encrypted);
-    fixture.client.decryptEventIfNeeded = vi.fn().mockRejectedValue(new Error("No room key"));
-
-    const message = await loadMatrixMessage(
+    await expect(loadMatrixMessage(
       fixture.client, fixture.room, "$encrypted", "A direct contact", false,
-    );
-    expect(message.text).toContain("waiting for a room key");
-    expect(message.text).not.toContain("ciphertext-must-not-be-rendered");
-    expect(message.matrix?.encryptionStatus).toBe("pending");
+    )).rejects.toThrow(/not an available message/i);
   });
 });

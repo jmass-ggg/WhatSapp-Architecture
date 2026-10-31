@@ -65,7 +65,6 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
         <span className="attachment-image-caption">
           <ImageIcon size={14} />
           {attachment.name}
-          {attachment.demoOnly && <small>DEMO</small>}
         </span>
       </div>
     );
@@ -82,7 +81,6 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
           {attachment.mimeType?.split("/").at(-1)?.toUpperCase() ?? "FILE"}
           <span>·</span>
           {formatBytes(attachment.size)}
-          {attachment.demoOnly && <em> · demo preview</em>}
         </small>
       </span>
       {mediaSource && attachment.mediaUri && (

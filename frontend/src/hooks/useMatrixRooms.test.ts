@@ -1,8 +1,8 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createEncryptedRoomMock, matrixSnapshot } = vi.hoisted(() => ({
-  createEncryptedRoomMock: vi.fn(),
+const { createPlainRoomMock, matrixSnapshot } = vi.hoisted(() => ({
+  createPlainRoomMock: vi.fn(),
   matrixSnapshot: {
     client: {
       getRooms: vi.fn((): unknown[] => []),
@@ -11,8 +11,7 @@ const { createEncryptedRoomMock, matrixSnapshot } = vi.hoisted(() => ({
     rooms: [],
     status: "connected",
     initialSyncComplete: true,
-    cryptoStatus: "ready",
-    cryptoOnboardingStatus: "ready",
+    legacyRoomIds: [],
     error: null,
     authenticationError: false,
     recentEvents: [],
@@ -23,8 +22,10 @@ vi.mock("../context/MatrixContext", () => ({
   useMatrixContext: () => matrixSnapshot,
 }));
 
-vi.mock("../services/matrix/encryption", () => ({
-  createEncryptedRoom: createEncryptedRoomMock,
+vi.mock("../services/matrix/messaging", () => ({
+  createPlainRoom: createPlainRoomMock,
+  isLegacyEncryptedRoom: (room: { hasEncryptionStateEvent?: () => boolean }) =>
+    Boolean(room.hasEncryptionStateEvent?.()),
   MATRIX_GROUP_MARKER_TYPE: "org.recruitable.chat.group",
 }));
 
@@ -32,15 +33,13 @@ import { useMatrixRooms } from "./useMatrixRooms";
 
 describe("useMatrixRooms", () => {
   beforeEach(() => {
-    createEncryptedRoomMock.mockReset();
+    createPlainRoomMock.mockReset();
     matrixSnapshot.client.getRooms.mockClear();
     matrixSnapshot.client.getRooms.mockReturnValue([]);
-    matrixSnapshot.cryptoStatus = "ready";
-    matrixSnapshot.cryptoOnboardingStatus = "ready";
-    createEncryptedRoomMock.mockResolvedValue("!direct:localhost");
+    createPlainRoomMock.mockResolvedValue("!direct:localhost");
   });
 
-  it("shares an in-flight encrypted room creation for the same Matrix user", async () => {
+  it("shares an in-flight plaintext room creation for the same Matrix user", async () => {
     const { result } = renderHook(() => useMatrixRooms());
 
     const [first, second] = await Promise.all([
@@ -50,13 +49,13 @@ describe("useMatrixRooms", () => {
 
     expect(first).toBe("!direct:localhost");
     expect(second).toBe("!direct:localhost");
-    expect(createEncryptedRoomMock).toHaveBeenCalledTimes(1);
+    expect(createPlainRoomMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse a one-member group as a direct conversation", async () => {
     const groupRoom = {
       getMyMembership: () => "join",
-      hasEncryptionStateEvent: () => true,
+      hasEncryptionStateEvent: () => false,
       currentState: {
         getStateEvents: (type: string) =>
           type === "org.recruitable.chat.group"
@@ -75,20 +74,47 @@ describe("useMatrixRooms", () => {
 
     await result.current.createDirect("peer-id", "Peer", "@peer:localhost");
 
-    expect(createEncryptedRoomMock).toHaveBeenCalledOnce();
+    expect(createPlainRoomMock).toHaveBeenCalledOnce();
   });
 
-  it("does not create a conversation before encryption onboarding is ready", async () => {
-    matrixSnapshot.cryptoOnboardingStatus = "restore_encryption";
+  it("never reuses a retired encrypted direct room", async () => {
+    const encryptedDirect = {
+      roomId: "!old:localhost",
+      getMyMembership: () => "join",
+      hasEncryptionStateEvent: () => true,
+      currentState: { getStateEvents: () => null },
+      getMembers: () => [{ userId: "@peer:localhost", membership: "join" }],
+    };
+    matrixSnapshot.client.getRooms.mockReturnValue([encryptedDirect]);
     const { result } = renderHook(() => useMatrixRooms());
 
     await expect(
       result.current.createDirect("peer-id", "Peer", "@peer:localhost"),
-    ).rejects.toThrow(/finish secure messaging setup/i);
-    expect(createEncryptedRoomMock).not.toHaveBeenCalled();
+    ).resolves.toBe("!direct:localhost");
+    expect(createPlainRoomMock).toHaveBeenCalledOnce();
   });
 
-  it("creates a private encrypted group and shares in-flight requests", async () => {
+  it("reuses an existing plaintext direct room instead of creating a duplicate", async () => {
+    const plainDirect = {
+      roomId: "!plain:localhost",
+      getMyMembership: () => "join",
+      hasEncryptionStateEvent: () => false,
+      currentState: { getStateEvents: () => null },
+      getMembers: () => [
+        { userId: "@self:localhost", membership: "join" },
+        { userId: "@peer:localhost", membership: "join" },
+      ],
+    };
+    matrixSnapshot.client.getRooms.mockReturnValue([plainDirect]);
+    const { result } = renderHook(() => useMatrixRooms());
+
+    await expect(
+      result.current.createDirect("peer-id", "Peer", "@peer:localhost"),
+    ).resolves.toBe("!plain:localhost");
+    expect(createPlainRoomMock).not.toHaveBeenCalled();
+  });
+
+  it("creates a private plaintext group and shares in-flight requests", async () => {
     const { result } = renderHook(() => useMatrixRooms());
     const invitees = ["@bob:localhost", "@charlie:localhost"];
 
@@ -99,8 +125,8 @@ describe("useMatrixRooms", () => {
 
     expect(first).toBe("!direct:localhost");
     expect(second).toBe("!direct:localhost");
-    expect(createEncryptedRoomMock).toHaveBeenCalledOnce();
-    expect(createEncryptedRoomMock).toHaveBeenCalledWith(
+    expect(createPlainRoomMock).toHaveBeenCalledOnce();
+    expect(createPlainRoomMock).toHaveBeenCalledWith(
       matrixSnapshot.client,
       {
         invitees,
@@ -122,6 +148,6 @@ describe("useMatrixRooms", () => {
         "@bob:localhost",
       ]),
     ).rejects.toThrow(/at least two different/i);
-    expect(createEncryptedRoomMock).not.toHaveBeenCalled();
+    expect(createPlainRoomMock).not.toHaveBeenCalled();
   });
 });

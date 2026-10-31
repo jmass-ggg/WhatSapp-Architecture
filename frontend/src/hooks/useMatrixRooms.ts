@@ -5,29 +5,26 @@ import { useMatrixContext } from "../context/MatrixContext";
 import type { Conversation } from "../types";
 import type { MatrixConnectionStatus, MatrixEventSummary } from "../services/matrix/session";
 import {
-  createEncryptedRoom,
+  createPlainRoom,
+  isLegacyEncryptedRoom,
   MATRIX_GROUP_MARKER_TYPE,
-} from "../services/matrix/encryption";
+} from "../services/matrix/messaging";
 
 function isMarkedGroupRoom(room: Room): boolean {
   const version = room.currentState
     .getStateEvents(MATRIX_GROUP_MARKER_TYPE, "")
     ?.getContent().version;
-  return (
-    typeof version === "number" &&
-    Number.isInteger(version) &&
-    version >= 1
-  );
+  return typeof version === "number" && Number.isInteger(version) && version >= 1;
 }
+
+const activeMembership = (membership: string | undefined) =>
+  membership === "join" || membership === "invite";
 
 export interface UseMatrixRoomsResult {
   rooms: Conversation[];
+  legacyRoomIds: string[];
   status: MatrixConnectionStatus;
   initialSyncComplete: boolean;
-  cryptoStatus: ReturnType<typeof useMatrixContext>["cryptoStatus"];
-  cryptoOnboardingStatus: ReturnType<
-    typeof useMatrixContext
-  >["cryptoOnboardingStatus"];
   error: string | null;
   authenticationError: boolean;
   recentEvents: MatrixEventSummary[];
@@ -43,10 +40,9 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
   const {
     client,
     rooms,
+    legacyRoomIds,
     status,
     initialSyncComplete,
-    cryptoStatus,
-    cryptoOnboardingStatus,
     error,
     authenticationError,
     recentEvents,
@@ -57,33 +53,25 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
   const createDirect = useCallback(
     async (_userId: string, _displayName: string, matrixUserId: string) => {
       if (!client) throw new Error("Sign in to start a conversation.");
-      if (cryptoStatus !== "ready" || cryptoOnboardingStatus !== "ready") {
-        throw new Error(
-          "Finish secure messaging setup before creating an encrypted conversation.",
-        );
-      }
       const pending = directRoomPromises.current.get(matrixUserId);
       if (pending) return pending;
 
       const creation = (async () => {
-        const existing = client.getRooms().find((room) =>
-          (room.getMyMembership() === "join" || room.getMyMembership() === "invite") &&
-          room.hasEncryptionStateEvent() &&
-          !isMarkedGroupRoom(room) &&
-          room.getMembers().some((member) =>
-            member.userId === matrixUserId &&
-            (member.membership === "join" || member.membership === "invite"),
-          ) &&
-          room.getMembers().filter((member) =>
-            member.userId !== client.getUserId() &&
-            (member.membership === "join" || member.membership === "invite"),
-          ).length === 1,
+        // Reuse only an existing plaintext direct room; retired encrypted rooms are never reused.
+        const existing = client.getRooms().find(
+          (room) =>
+            activeMembership(room.getMyMembership()) &&
+            !isLegacyEncryptedRoom(room) &&
+            !isMarkedGroupRoom(room) &&
+            room.getMembers().some(
+              (member) => member.userId === matrixUserId && activeMembership(member.membership),
+            ) &&
+            room.getMembers().filter(
+              (member) => member.userId !== client.getUserId() && activeMembership(member.membership),
+            ).length === 1,
         );
         if (existing) return existing.roomId;
-        return createEncryptedRoom(client, {
-          invitees: [matrixUserId],
-          isDirect: true,
-        });
+        return createPlainRoom(client, { invitees: [matrixUserId], isDirect: true });
       })();
       directRoomPromises.current.set(matrixUserId, creation);
       try {
@@ -94,27 +82,19 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
         }
       }
     },
-    [client, cryptoOnboardingStatus, cryptoStatus],
+    [client],
   );
+
   const createGroup = useCallback(
     async (name: string, matrixUserIds: string[]) => {
       if (!client) throw new Error("Sign in to create a group.");
-      if (cryptoStatus !== "ready" || cryptoOnboardingStatus !== "ready") {
-        throw new Error(
-          "Finish secure messaging setup before creating an encrypted group.",
-        );
-      }
-
       const normalizedName = name.trim();
       if (!normalizedName) throw new Error("Enter a name for the group.");
       if (normalizedName.length > 80) {
         throw new Error("Group names must be 80 characters or fewer.");
       }
       const uniqueMatrixUserIds = [...new Set(matrixUserIds)];
-      if (
-        uniqueMatrixUserIds.length !== matrixUserIds.length ||
-        uniqueMatrixUserIds.length < 2
-      ) {
+      if (uniqueMatrixUserIds.length !== matrixUserIds.length || uniqueMatrixUserIds.length < 2) {
         throw new Error("Select at least two different accepted contacts.");
       }
       const ownUserId = client.getUserId();
@@ -122,14 +102,11 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
         throw new Error("The current user cannot be selected as a group participant.");
       }
 
-      const key = JSON.stringify([
-        normalizedName,
-        [...uniqueMatrixUserIds].sort(),
-      ]);
+      const key = JSON.stringify([normalizedName, [...uniqueMatrixUserIds].sort()]);
       const pending = groupRoomPromises.current.get(key);
       if (pending) return pending;
 
-      const creation = createEncryptedRoom(client, {
+      const creation = createPlainRoom(client, {
         invitees: uniqueMatrixUserIds,
         name: normalizedName,
         isDirect: false,
@@ -144,14 +121,14 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
         }
       }
     },
-    [client, cryptoOnboardingStatus, cryptoStatus],
+    [client],
   );
+
   return {
     rooms,
+    legacyRoomIds,
     status,
     initialSyncComplete,
-    cryptoStatus,
-    cryptoOnboardingStatus,
     error,
     authenticationError,
     recentEvents,

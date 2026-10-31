@@ -49,13 +49,7 @@ interface SessionFailure {
 }
 
 export function MatrixProvider({ children }: PropsWithChildren) {
-  const {
-    user,
-    mode,
-    matrixSession,
-    newlyRegisteredUserId,
-    completeNewAccountCryptoSetup,
-  } = useAuth();
+  const { user, mode, matrixSession } = useAuth();
   const [activeLease, setActiveLease] = useState<ActiveLease | null>(null);
   const [sessionFailure, setSessionFailure] =
     useState<SessionFailure | null>(null);
@@ -72,8 +66,6 @@ export function MatrixProvider({ children }: PropsWithChildren) {
       lease = matrixClientRegistry.acquire(
         matrixSession,
         matrixUserIdForAppUserId(user.id),
-        undefined,
-        newlyRegisteredUserId === user.id,
       );
       setSessionFailure(null);
       setActiveLease({
@@ -97,7 +89,7 @@ export function MatrixProvider({ children }: PropsWithChildren) {
     return () => {
       lease.release();
     };
-  }, [completeNewAccountCryptoSetup, matrixSession, mode, newlyRegisteredUserId, user]);
+  }, [matrixSession, mode, user]);
 
   const isCurrent =
     mode === "live" &&
@@ -126,25 +118,6 @@ export function MatrixProvider({ children }: PropsWithChildren) {
     getSnapshot,
     () => EMPTY_MATRIX_CONNECTION_SNAPSHOT,
   );
-
-  useEffect(() => {
-    if (
-      manager &&
-      user &&
-      newlyRegisteredUserId === user.id &&
-      snapshot.cryptoOnboardingStatus === "ready" &&
-      snapshot.crossSigningReady === true
-    ) {
-      completeNewAccountCryptoSetup(user.id);
-    }
-  }, [
-    completeNewAccountCryptoSetup,
-    manager,
-    newlyRegisteredUserId,
-    snapshot.crossSigningReady,
-    snapshot.cryptoOnboardingStatus,
-    user,
-  ]);
 
   const value = useMemo<MatrixContextValue>(
     () =>

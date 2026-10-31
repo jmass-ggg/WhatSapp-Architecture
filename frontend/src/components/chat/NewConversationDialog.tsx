@@ -1,11 +1,9 @@
-import { ArrowUpRight, LoaderCircle, Search, X } from "lucide-react";
+import { LoaderCircle, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { UserAvatar } from "../UserAvatar";
 import type { ApiClient } from "../../services/api/client";
 import type {
-  AuthMode,
-  Conversation,
   DirectoryPage,
   DirectoryUser,
   UserConnection,
@@ -14,30 +12,26 @@ import { ApiError } from "../../services/api/client";
 
 interface NewConversationDialogProps {
   open: boolean;
-  mode: AuthMode;
+  initialGroupMode?: boolean;
   api: ApiClient;
   currentUserId: string;
-  conversations: Conversation[];
   connections: UserConnection[];
   incomingRequests: UserConnection[];
   outgoingRequests: UserConnection[];
   onClose: () => void;
-  onSelectDemo: (conversation: Conversation) => void;
   onSendRequest: (user: DirectoryUser) => Promise<void>;
   onCreateGroup: (name: string, contactUserIds: string[]) => Promise<void>;
 }
 
 export function NewConversationDialog({
   open,
-  mode,
+  initialGroupMode = false,
   api,
   currentUserId,
-  conversations,
   connections,
   incomingRequests,
   outgoingRequests,
   onClose,
-  onSelectDemo,
   onSendRequest,
   onCreateGroup,
 }: NewConversationDialogProps) {
@@ -69,7 +63,7 @@ export function NewConversationDialog({
 
   useEffect(() => {
     if (!open) return;
-    setGroupMode(false);
+    setGroupMode(initialGroupMode);
     setGroupName("");
     setSelectedGroupMemberIds(new Set());
     setError("");
@@ -78,7 +72,7 @@ export function NewConversationDialog({
   }, [open]);
 
   useEffect(() => {
-    if (!open || groupMode || mode !== "live" || query.trim().length < 2) {
+    if (!open || groupMode || query.trim().length < 2) {
       setResults([]);
       setLoading(false);
       setError("");
@@ -115,7 +109,7 @@ export function NewConversationDialog({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [api, currentUserId, groupMode, mode, open, query]);
+  }, [api, currentUserId, groupMode, open, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -199,22 +193,13 @@ export function NewConversationDialog({
       setError(
         cause instanceof Error
           ? cause.message
-          : "The encrypted group could not be created.",
+          : "The group could not be created.",
       );
     } finally {
       creatingGroupRef.current = false;
       setCreatingGroup(false);
     }
   }
-
-  const demoResults = conversations.filter((conversation) => {
-    const term = query.trim().toLowerCase();
-    return (
-      !term ||
-      conversation.name.toLowerCase().includes(term) ||
-      conversation.username?.toLowerCase().includes(term)
-    );
-  });
 
   return (
     <div
@@ -232,15 +217,13 @@ export function NewConversationDialog({
       >
         <header className="new-chat-dialog-header">
           <div>
-            <span className="eyebrow">{mode === "demo" ? "DEMO PREVIEW" : "RECRUITABLE CHAT DIRECTORY"}</span>
+            <span className="eyebrow">{groupMode ? "NEW GROUP" : "NEW CHAT"}</span>
             <h2 id="new-chat-title">
               {groupMode ? "Create a group" : "Start a conversation"}
             </h2>
             <p>
               {groupMode
-                ? "Create an encrypted group with at least two of your accepted contacts."
-                : mode === "demo"
-                ? "Choose a sample conversation. Nothing is sent to a server."
+                ? "Create a group with at least two of your accepted contacts."
                 : "Search by username and send a connection request. You can chat after they accept."}
             </p>
           </div>
@@ -248,7 +231,7 @@ export function NewConversationDialog({
             <X size={19} />
           </button>
         </header>
-        {mode === "live" && (
+        {(
           <div className="conversation-creation-options" aria-label="Conversation type">
             <button
               type="button"
@@ -293,7 +276,7 @@ export function NewConversationDialog({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={mode === "demo" ? "Find a sample contact" : "Search username"}
+              placeholder="Search username"
               autoFocus
               autoComplete="off"
             />
@@ -347,29 +330,7 @@ export function NewConversationDialog({
           </div>
         ) : (
           <div className="new-chat-results">
-          {mode === "demo" ? (
-            demoResults.map((conversation) => (
-              <button
-                type="button"
-                className="directory-result"
-                key={conversation.id}
-                onClick={() => onSelectDemo(conversation)}
-              >
-                <UserAvatar
-                  name={conversation.name}
-                  initials={conversation.initials}
-                  accent={conversation.accent}
-                  size="md"
-                  online={conversation.isOnline}
-                />
-                <span className="directory-result-copy">
-                  <strong>{conversation.name}</strong>
-                  <small>{conversation.username ?? "Recruitable Chat demo contact"}</small>
-                </span>
-                <ArrowUpRight size={17} />
-              </button>
-            ))
-          ) : loading ? (
+          {loading ? (
             <div className="directory-state"><LoaderCircle className="spin" size={20} /> Searching users…</div>
           ) : query.trim().length < 2 ? (
               <div className="directory-state">Type at least 2 characters to search usernames.</div>
@@ -459,7 +420,7 @@ export function NewConversationDialog({
         {creatingGroup && (
           <div className="group-create-progress" role="status">
             <LoaderCircle className="spin" size={15} />
-            Creating encrypted group and sending invitations…
+            Creating group and sending invitations…
           </div>
         )}
       </section>

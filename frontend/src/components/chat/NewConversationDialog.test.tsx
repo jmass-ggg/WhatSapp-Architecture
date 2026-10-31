@@ -58,15 +58,12 @@ describe("NewConversationDialog", () => {
     render(
       <NewConversationDialog
         open
-        mode="live"
         api={api}
         currentUserId="james-user-id"
-        conversations={[]}
         connections={[]}
         incomingRequests={[]}
         outgoingRequests={[]}
         onClose={vi.fn()}
-        onSelectDemo={vi.fn()}
         onSendRequest={onSendRequest}
         onCreateGroup={vi.fn().mockResolvedValue(undefined)}
       />,
@@ -90,15 +87,12 @@ describe("NewConversationDialog", () => {
     render(
       <NewConversationDialog
         open
-        mode="live"
         api={{ request: vi.fn() } as unknown as ApiClient}
         currentUserId="james-user-id"
-        conversations={[]}
         connections={[acceptedContact("bob-id", "Bob"), acceptedContact("charlie-id", "Charlie")]}
         incomingRequests={[]}
         outgoingRequests={[]}
         onClose={vi.fn()}
-        onSelectDemo={vi.fn()}
         onSendRequest={vi.fn()}
         onCreateGroup={onCreateGroup}
       />,
@@ -128,10 +122,8 @@ describe("NewConversationDialog", () => {
     render(
       <NewConversationDialog
         open
-        mode="live"
         api={{ request: vi.fn() } as unknown as ApiClient}
         currentUserId="james-user-id"
-        conversations={[]}
         connections={[
           acceptedContact("bob-id", "Bob"),
           acceptedContact("charlie-id", "Charlie"),
@@ -142,7 +134,6 @@ describe("NewConversationDialog", () => {
         incomingRequests={[]}
         outgoingRequests={[]}
         onClose={vi.fn()}
-        onSelectDemo={vi.fn()}
         onSendRequest={vi.fn()}
         onCreateGroup={onCreateGroup}
       />,
