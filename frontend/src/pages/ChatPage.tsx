@@ -80,7 +80,6 @@ export function ChatPage() {
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
   const messageListRef = useRef<MessageListHandle>(null);
   const groupCreationPromise = useRef<Promise<void> | null>(null);
-  const provisionedConnectionIds = useRef(new Set<string>());
 
   const notify = useCallback(
     (message: string, kind: ToastState["kind"] = "info") => setToast({ message, kind }),
@@ -119,25 +118,6 @@ export function ChatPage() {
       (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
     );
   }, [contacts.connections, connectionsByMatrixUserId, matrix.rooms, presence]);
-
-  // The requester of an accepted connection creates the fresh plaintext direct room.
-  useEffect(() => {
-    if (mode !== "live" || !user || !matrix.initialSyncComplete) return;
-    for (const connection of contacts.connections) {
-      if (connection.requester_id !== user.id || provisionedConnectionIds.current.has(connection.id)) continue;
-      const matrixUserId = matrixUserIdForAppUserId(connection.other_user.id);
-      provisionedConnectionIds.current.add(connection.id);
-      if (matrix.rooms.some((room) => !room.isGroup && room.matrixUserId === matrixUserId)) continue;
-      const name = connection.other_user.profile?.display_name || connection.other_user.username;
-      void matrix
-        .createDirect(connection.other_user.id, name, matrixUserId)
-        .then(() => notify(`Conversation ready with @${connection.other_user.username}.`, "success"))
-        .catch((cause: unknown) => {
-          provisionedConnectionIds.current.delete(connection.id);
-          notify(errorMessage(cause, "The conversation could not be created."), "error");
-        });
-    }
-  }, [contacts.connections, matrix.createDirect, matrix.initialSyncComplete, matrix.rooms, mode, notify, user]);
 
   const selectedConversation = conversationId
     ? conversations.find((conversation) => conversation.id === conversationId) ?? null
@@ -292,24 +272,21 @@ export function ChatPage() {
       setStartingContactId(contactUserId);
       try {
         if (!matrix.initialSyncComplete) throw new Error("Wait for the connection to finish syncing.");
-        const connection = await contacts.verifyAccepted(contactUserId);
-        const matrixUserId = matrixUserIdForAppUserId(contactUserId);
-        const existing = matrix.rooms.find((room) => !room.isGroup && room.matrixUserId === matrixUserId);
-        if (existing) {
-          navigate(`/chat/${encodeURIComponent(existing.roomId ?? existing.id)}`);
-        } else if (connection.requester_id !== user?.id) {
-          throw new Error("The person who sent the request is preparing the conversation.");
-        } else {
-          const roomId = await matrix.createDirect(contactUserId, conversation.name, matrixUserId);
-          navigate(`/chat/${encodeURIComponent(roomId)}`);
-        }
+        await contacts.verifyAccepted(contactUserId);
+        // createDirect re-discovers existing/pending rooms first and only then creates one.
+        const roomId = await matrix.createDirect(
+          contactUserId,
+          conversation.name,
+          matrixUserIdForAppUserId(contactUserId),
+        );
+        navigate(`/chat/${encodeURIComponent(roomId)}`);
       } catch (cause) {
         notify(errorMessage(cause, "The conversation could not be started."), "error");
       } finally {
         setStartingContactId(null);
       }
     },
-    [contacts.verifyAccepted, matrix.createDirect, matrix.initialSyncComplete, matrix.rooms, navigate, notify, startingContactId, user],
+    [contacts.verifyAccepted, matrix.createDirect, matrix.initialSyncComplete, navigate, notify, startingContactId],
   );
 
   const acceptInvitation = useCallback(async () => {

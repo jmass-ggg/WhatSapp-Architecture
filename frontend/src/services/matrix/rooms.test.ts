@@ -2,7 +2,7 @@ import { EventStatus, MatrixEvent, ReceiptType, type Room } from "matrix-js-sdk"
 import { describe, expect, it, vi } from "vitest";
 
 import { MATRIX_DIRECT_MARKER_TYPE, MATRIX_GROUP_MARKER_TYPE } from "./messaging";
-import { conversationFromMatrixRoom, conversationsFromMatrixClient, legacyEncryptedRoomIds } from "./rooms";
+import { conversationFromMatrixRoom, conversationsFromMatrixClient, legacyEncryptedRoomIds, findDirectRoomId } from "./rooms";
 
 describe("Matrix room mapping", () => {
   it("uses only a real recipient public receipt at a known timeline position", () => {
@@ -254,6 +254,36 @@ describe("Matrix room mapping", () => {
       isInvited: true,
       lastMessage: "No messages yet",
     });
+  });
+
+  it("collapses duplicate direct rooms by Matrix ID, keeps groups, and never drops history", () => {
+    const mk = (roomId: string, ids: string[], marker?: string, membership = "join", ts = 0) => ({
+      roomId, name: roomId,
+      currentState: { getStateEvents: (t: string) => t === marker ? { getContent: () => ({ version: 1 }) } : null },
+      getMembers: () => ids.map((userId) => ({
+        userId, membership: "join", name: "Same Name", typing: false,
+        events: { member: { getContent: () => ({}) } },
+      })),
+      getMember: () => null,
+      getLiveTimeline: () => ({ getEvents: () => [] }),
+      getMyMembership: () => membership,
+      hasEncryptionStateEvent: () => false,
+      getUnreadNotificationCount: () => 0,
+      getLastActiveTimestamp: () => ts,
+      guessDMUserId: () => ids[0],
+      getMxcAvatarUrl: () => null,
+    }) as unknown as Room;
+    const rooms = [
+      mk("!dup2:localhost", ["@bob:localhost"], MATRIX_DIRECT_MARKER_TYPE, "join", 5),
+      mk("!dup1:localhost", ["@bob:localhost"], MATRIX_DIRECT_MARKER_TYPE, "join", 5),
+      mk("!other:localhost", ["@carol:localhost"], MATRIX_DIRECT_MARKER_TYPE),
+      mk("!g1:localhost", ["@bob:localhost"], MATRIX_GROUP_MARKER_TYPE),
+      mk("!g2:localhost", ["@bob:localhost"], MATRIX_GROUP_MARKER_TYPE),
+    ];
+    const ids = conversationsFromMatrixClient(rooms, "@self:localhost").map((c) => c.id).sort();
+    expect(ids).toEqual(["!dup1:localhost", "!g1:localhost", "!g2:localhost", "!other:localhost"]);
+    expect(findDirectRoomId(rooms, "@self:localhost", "@bob:localhost")).toBe("!dup1:localhost");
+    expect(findDirectRoomId(rooms, "@self:localhost", "@nobody:localhost")).toBeUndefined();
   });
 
   it("shows friendly group sender names and typing activity without group read or delivery claims", () => {

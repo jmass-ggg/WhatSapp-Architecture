@@ -1,24 +1,10 @@
 import { useCallback, useRef } from "react";
-import type { Room } from "matrix-js-sdk";
 
 import { useMatrixContext } from "../context/MatrixContext";
 import type { Conversation } from "../types";
 import type { MatrixConnectionStatus, MatrixEventSummary } from "../services/matrix/session";
-import {
-  createPlainRoom,
-  isLegacyEncryptedRoom,
-  MATRIX_GROUP_MARKER_TYPE,
-} from "../services/matrix/messaging";
-
-function isMarkedGroupRoom(room: Room): boolean {
-  const version = room.currentState
-    .getStateEvents(MATRIX_GROUP_MARKER_TYPE, "")
-    ?.getContent().version;
-  return typeof version === "number" && Number.isInteger(version) && version >= 1;
-}
-
-const activeMembership = (membership: string | undefined) =>
-  membership === "join" || membership === "invite";
+import { createPlainRoom } from "../services/matrix/messaging";
+import { findDirectRoomId } from "../services/matrix/rooms";
 
 export interface UseMatrixRoomsResult {
   rooms: Conversation[];
@@ -53,24 +39,16 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
   const createDirect = useCallback(
     async (_userId: string, _displayName: string, matrixUserId: string) => {
       if (!client) throw new Error("Sign in to start a conversation.");
+      if (!initialSyncComplete) throw new Error("Wait for the connection to finish syncing.");
       const pending = directRoomPromises.current.get(matrixUserId);
       if (pending) return pending;
 
       const creation = (async () => {
-        // Reuse only an existing plaintext direct room; retired encrypted rooms are never reused.
-        const existing = client.getRooms().find(
-          (room) =>
-            activeMembership(room.getMyMembership()) &&
-            !isLegacyEncryptedRoom(room) &&
-            !isMarkedGroupRoom(room) &&
-            room.getMembers().some(
-              (member) => member.userId === matrixUserId && activeMembership(member.membership),
-            ) &&
-            room.getMembers().filter(
-              (member) => member.userId !== client.getUserId() && activeMembership(member.membership),
-            ).length === 1,
-        );
-        if (existing) return existing.roomId;
+        // Reuse a joined/invited plaintext direct room; never groups or retired encrypted rooms.
+        const ownUserId = client.getUserId();
+        if (!ownUserId) throw new Error("Sign in to start a conversation.");
+        const existing = findDirectRoomId(client.getRooms(), ownUserId, matrixUserId);
+        if (existing) return existing;
         return createPlainRoom(client, { invitees: [matrixUserId], isDirect: true });
       })();
       directRoomPromises.current.set(matrixUserId, creation);
@@ -82,7 +60,7 @@ export function useMatrixRooms(): UseMatrixRoomsResult {
         }
       }
     },
-    [client],
+    [client, initialSyncComplete],
   );
 
   const createGroup = useCallback(

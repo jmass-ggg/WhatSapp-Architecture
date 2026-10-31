@@ -22,14 +22,49 @@ vi.mock("../context/MatrixContext", () => ({
   useMatrixContext: () => matrixSnapshot,
 }));
 
-vi.mock("../services/matrix/messaging", () => ({
+vi.mock("../services/matrix/messaging", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/matrix/messaging")>()),
   createPlainRoom: createPlainRoomMock,
-  isLegacyEncryptedRoom: (room: { hasEncryptionStateEvent?: () => boolean }) =>
-    Boolean(room.hasEncryptionStateEvent?.()),
-  MATRIX_GROUP_MARKER_TYPE: "org.recruitable.chat.group",
 }));
 
 import { useMatrixRooms } from "./useMatrixRooms";
+
+const SELF = "@self:localhost";
+const marker = { getContent: () => ({ version: 1 }) };
+function fakeRoom(
+  roomId: string,
+  opts: {
+    peers?: string[];
+    membership?: "join" | "invite";
+    encrypted?: boolean;
+    markerType?: string;
+    events?: number;
+  } = {},
+) {
+  const members = [
+    { userId: SELF, membership: "join", name: "Me", typing: false, events: { member: { getContent: () => ({}) } } },
+    ...(opts.peers ?? []).map((userId) => ({
+      userId, membership: "join", name: userId.slice(1, 5), typing: false,
+      events: { member: { getContent: () => ({}) } },
+    })),
+  ];
+  return {
+    roomId,
+    name: roomId,
+    currentState: {
+      getStateEvents: (type: string) => (type === opts.markerType ? marker : null),
+    },
+    getMembers: () => members,
+    getMember: (id: string) => members.find((m) => m.userId === id) ?? null,
+    getLiveTimeline: () => ({ getEvents: () => [] }),
+    getMyMembership: () => opts.membership ?? "join",
+    hasEncryptionStateEvent: () => Boolean(opts.encrypted),
+    getUnreadNotificationCount: () => 0,
+    getLastActiveTimestamp: () => opts.events ?? 0,
+    guessDMUserId: () => opts.peers?.[0],
+    getMxcAvatarUrl: () => null,
+  };
+}
 
 describe("useMatrixRooms", () => {
   beforeEach(() => {
@@ -52,65 +87,101 @@ describe("useMatrixRooms", () => {
     expect(createPlainRoomMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not reuse a one-member group as a direct conversation", async () => {
-    const groupRoom = {
-      getMyMembership: () => "join",
-      hasEncryptionStateEvent: () => false,
-      currentState: {
-        getStateEvents: (type: string) =>
-          type === "org.recruitable.chat.group"
-            ? { getContent: () => ({ version: 1 }) }
-            : null,
-      },
-      getMembers: () => [
-        {
-          userId: "@peer:localhost",
-          membership: "join",
-        },
-      ],
-    };
-    matrixSnapshot.client.getRooms.mockReturnValue([groupRoom]);
+  it("creates a room for an accepted contact with no room", async () => {
     const { result } = renderHook(() => useMatrixRooms());
+    await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+      .resolves.toBe("!direct:localhost");
+    expect(createPlainRoomMock).toHaveBeenCalledOnce();
+  });
 
-    await result.current.createDirect("peer-id", "Peer", "@peer:localhost");
+  it("does not reuse a one-member group as a direct conversation", async () => {
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!group:localhost", { peers: ["@peer:localhost"], markerType: "org.recruitable.chat.group" }),
+    ]);
+    const { result } = renderHook(() => useMatrixRooms());
+    await result.current.createDirect("p", "Peer", "@peer:localhost");
+    expect(createPlainRoomMock).toHaveBeenCalledOnce();
+  });
 
+  it("does not reuse a multi-member room as a direct conversation", async () => {
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!legacy-group:localhost", { peers: ["@peer:localhost", "@other:localhost"] }),
+    ]);
+    const { result } = renderHook(() => useMatrixRooms());
+    await result.current.createDirect("p", "Peer", "@peer:localhost");
     expect(createPlainRoomMock).toHaveBeenCalledOnce();
   });
 
   it("never reuses a retired encrypted direct room", async () => {
-    const encryptedDirect = {
-      roomId: "!old:localhost",
-      getMyMembership: () => "join",
-      hasEncryptionStateEvent: () => true,
-      currentState: { getStateEvents: () => null },
-      getMembers: () => [{ userId: "@peer:localhost", membership: "join" }],
-    };
-    matrixSnapshot.client.getRooms.mockReturnValue([encryptedDirect]);
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!old:localhost", { peers: ["@peer:localhost"], encrypted: true }),
+    ]);
     const { result } = renderHook(() => useMatrixRooms());
-
-    await expect(
-      result.current.createDirect("peer-id", "Peer", "@peer:localhost"),
-    ).resolves.toBe("!direct:localhost");
+    await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+      .resolves.toBe("!direct:localhost");
     expect(createPlainRoomMock).toHaveBeenCalledOnce();
   });
 
-  it("reuses an existing plaintext direct room instead of creating a duplicate", async () => {
-    const plainDirect = {
-      roomId: "!plain:localhost",
-      getMyMembership: () => "join",
-      hasEncryptionStateEvent: () => false,
-      currentState: { getStateEvents: () => null },
-      getMembers: () => [
-        { userId: "@self:localhost", membership: "join" },
-        { userId: "@peer:localhost", membership: "join" },
-      ],
-    };
-    matrixSnapshot.client.getRooms.mockReturnValue([plainDirect]);
-    const { result } = renderHook(() => useMatrixRooms());
+  it("reuses an existing plaintext direct room (refresh, repeated refreshes)", async () => {
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!plain:localhost", { peers: ["@peer:localhost"] }),
+    ]);
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      const { result, unmount } = renderHook(() => useMatrixRooms());
+      await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+        .resolves.toBe("!plain:localhost");
+      unmount();
+    }
+    expect(createPlainRoomMock).not.toHaveBeenCalled();
+  });
 
-    await expect(
-      result.current.createDirect("peer-id", "Peer", "@peer:localhost"),
-    ).resolves.toBe("!plain:localhost");
+  it("mounting the hook never creates a room by itself", () => {
+    renderHook(() => useMatrixRooms());
+    renderHook(() => useMatrixRooms());
+    expect(createPlainRoomMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses a pending direct invitation instead of creating a room", async () => {
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!invite:localhost", { peers: ["@peer:localhost"], membership: "invite" }),
+    ]);
+    const { result } = renderHook(() => useMatrixRooms());
+    await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+      .resolves.toBe("!invite:localhost");
+    expect(createPlainRoomMock).not.toHaveBeenCalled();
+  });
+
+  it("picks the same primary among existing duplicates, preferring joined rooms", async () => {
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!b-dup:localhost", { peers: ["@peer:localhost"], membership: "invite" }),
+      fakeRoom("!z-dup:localhost", { peers: ["@peer:localhost"] }),
+      fakeRoom("!a-dup:localhost", { peers: ["@peer:localhost"] }),
+    ]);
+    const { result } = renderHook(() => useMatrixRooms());
+    await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+      .resolves.toBe("!a-dup:localhost");
+    expect(createPlainRoomMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for the initial sync before discovering or creating", async () => {
+    matrixSnapshot.initialSyncComplete = false;
+    try {
+      const { result } = renderHook(() => useMatrixRooms());
+      await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+        .rejects.toThrow(/finish syncing/i);
+      expect(createPlainRoomMock).not.toHaveBeenCalled();
+    } finally {
+      matrixSnapshot.initialSyncComplete = true;
+    }
+  });
+
+  it("finds a room that arrives after delayed member synchronization", async () => {
+    const { result } = renderHook(() => useMatrixRooms());
+    matrixSnapshot.client.getRooms.mockReturnValue([
+      fakeRoom("!late:localhost", { peers: ["@peer:localhost"] }),
+    ]);
+    await expect(result.current.createDirect("p", "Peer", "@peer:localhost"))
+      .resolves.toBe("!late:localhost");
     expect(createPlainRoomMock).not.toHaveBeenCalled();
   });
 

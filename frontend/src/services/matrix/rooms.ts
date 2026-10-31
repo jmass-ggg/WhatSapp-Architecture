@@ -208,13 +208,57 @@ export function legacyEncryptedRoomIds(rooms: Room[]): string[] {
     .map((room) => room.roomId);
 }
 
+/** Deterministic primary: joined over invited, then has history, newest activity, lowest room ID. */
+function comparePrimaryDirect(left: Conversation, right: Conversation): number {
+  return (
+    Number(left.isInvited) - Number(right.isInvited) ||
+    Number(right.messages.length > 0) - Number(left.messages.length > 0) ||
+    right.updatedAt.getTime() - left.updatedAt.getTime() ||
+    (left.roomId ?? left.id).localeCompare(right.roomId ?? right.id)
+  );
+}
+
+/**
+ * Keeps one direct conversation per Matrix peer (identified by Matrix user ID, never by
+ * display name). Extra rooms are only hidden from the list; nothing is left, forgotten or
+ * deleted, so their history stays on the server. Groups are never touched.
+ */
+export function collapseDuplicateDirects(conversations: Conversation[]): Conversation[] {
+  const primary = new Map<string, Conversation>();
+  for (const conversation of conversations) {
+    if (conversation.isGroup || !conversation.matrixUserId) continue;
+    const current = primary.get(conversation.matrixUserId);
+    if (!current || comparePrimaryDirect(conversation, current) < 0) {
+      primary.set(conversation.matrixUserId, conversation);
+    }
+  }
+  return conversations.filter(
+    (conversation) =>
+      conversation.isGroup ||
+      !conversation.matrixUserId ||
+      primary.get(conversation.matrixUserId) === conversation,
+  );
+}
+
 export function conversationsFromMatrixClient(
   rooms: Room[],
   ownUserId: string,
 ): Conversation[] {
-  return rooms
+  const conversations = rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
     .filter((room) => !isLegacyEncryptedRoom(room))
     .map((room) => conversationFromMatrixRoom(room, ownUserId))
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
+  return collapseDuplicateDirects(conversations);
+}
+
+/** Existing joined or invited plaintext direct room with this peer, if any. */
+export function findDirectRoomId(
+  rooms: Room[],
+  ownUserId: string,
+  peerMatrixUserId: string,
+): string | undefined {
+  return conversationsFromMatrixClient(rooms, ownUserId).find(
+    (conversation) => !conversation.isGroup && conversation.matrixUserId === peerMatrixUserId,
+  )?.roomId;
 }
