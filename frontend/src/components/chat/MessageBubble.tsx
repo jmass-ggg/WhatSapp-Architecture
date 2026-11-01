@@ -183,13 +183,13 @@ export function MessageBubble({
           {message.replyTo && (
             <button
               type="button"
-              className="reply-preview"
+              className="quoted-reply"
               onClick={() => message.replyTo?.eventId && onJump?.(message.replyTo.eventId)}
               disabled={!message.replyTo.eventId}
               title={message.replyTo.eventId ? "Jump to original message" : undefined}
             >
               <strong>{message.replyTo.sender}</strong>
-              <span>{message.replyTo.text}</span>
+              <span>{message.replyTo.text || "Original message unavailable"}</span>
             </button>
           )}
           {message.attachment && (

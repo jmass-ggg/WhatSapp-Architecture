@@ -95,3 +95,41 @@ describe("MessageComposer emoji insertion", () => {
     expect(screen.getByRole("dialog", { name: "Emoji picker" })).not.toBeNull();
   });
 });
+
+describe("MessageComposer reply preview", () => {
+  const base = { id: "1", text: "asdasd", sender: "them", senderName: "Acton Glenn", time: "8:30", delivery: "read" } as never;
+  const renderReply = (message: Record<string, unknown>, onCancelReply = vi.fn()) => {
+    render(<MessageComposer onSend={vi.fn().mockResolvedValue(undefined)} replyTo={{ ...(base as object), ...message } as never} onCancelReply={onCancelReply} />);
+    return onCancelReply;
+  };
+
+  it("shows sender and excerpt, and cancel keeps the draft and refocuses the input", () => {
+    const cancel = renderReply({});
+    expect(screen.getByText("Replying to Acton Glenn")).toBeTruthy();
+    expect(screen.getByText("asdasd")).toBeTruthy();
+    const input = screen.getByRole("textbox", { name: "Write a message" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "draft" } });
+    const btn = screen.getByRole("button", { name: "Cancel reply" });
+    expect(btn.getAttribute("title")).toBe("Cancel reply");
+    fireEvent.click(btn);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe("draft");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("labels own messages and attachment kinds without raw payloads", () => {
+    cleanup();
+    renderReply({ sender: "me", text: "" , attachment: { kind: "audio", name: "v.webm" } });
+    expect(screen.getByText("Replying to yourself")).toBeTruthy();
+    expect(screen.getByText("Voice message")).toBeTruthy();
+    cleanup();
+    renderReply({ text: "", attachment: { kind: "image", name: "a.png" } });
+    expect(screen.getByText("Photo")).toBeTruthy();
+    cleanup();
+    renderReply({ text: "", attachment: { kind: "file", name: "cv.pdf" } });
+    expect(screen.getByText("cv.pdf")).toBeTruthy();
+    cleanup();
+    renderReply({ text: "" });
+    expect(screen.getByText("Original message unavailable")).toBeTruthy();
+  });
+});

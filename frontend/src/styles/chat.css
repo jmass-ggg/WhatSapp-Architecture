@@ -517,27 +517,27 @@
 }
 
 
-.reply-preview {
+.quoted-reply {
   display: flex;
   flex-direction: column;
   gap: 3px;
   margin: 0 0 6px;
   padding: 6px 8px;
-  border-left: 2px solid var(--blue);
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.63);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: rgba(36, 87, 245, 0.07);
   color: var(--muted);
   font-size: 12px;
 }
 
 
-.reply-preview strong {
+.quoted-reply strong {
   color: var(--blue-deep);
   font-size: 12px;
 }
 
 
-.reply-preview span {
+.quoted-reply span {
   overflow: hidden;
   max-width: 310px;
   text-overflow: ellipsis;
@@ -1506,7 +1506,7 @@
 }
 
 
-.reply-preview {
+.quoted-reply {
   width: 100%;
   border: 0;
   text-align: left;
@@ -1514,7 +1514,7 @@
 }
 
 
-.reply-preview:disabled {
+.quoted-reply:disabled {
   cursor: default;
 }
 
@@ -2270,3 +2270,84 @@
 .message-bubble.has-audio { padding: 8px 12px 6px; box-shadow: 0 2px 8px rgba(27, 63, 184, 0.08); }
 .message-row.is-outgoing .message-bubble.has-audio { border-color: #cfdcff; background: #e4ecff; }
 .voice-bar .audio-time { margin: 0 4px; }
+
+
+/* Composer reply preview — scoped; independent of .quoted-reply in bubbles. */
+.composer-reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
+  min-height: 54px;
+  max-height: 68px;
+  margin: 0 0 8px;
+  padding: 10px 6px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.composer-reply-accent {
+  flex: 0 0 3px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--blue);
+}
+
+.composer-reply-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-reply-name {
+  overflow: hidden;
+  color: var(--blue);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-reply-text {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.composer-reply-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-reply-text svg { flex: 0 0 auto; }
+
+.composer-reply-cancel {
+  display: inline-flex;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  margin: -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.composer-reply-cancel:hover { background: rgba(36, 87, 245, 0.1); color: var(--blue-deep); }
+.composer-reply-cancel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+@media (pointer: coarse) {
+  .composer-reply-cancel { flex-basis: 44px; width: 44px; height: 44px; margin: -10px -4px -10px 0; }
+}

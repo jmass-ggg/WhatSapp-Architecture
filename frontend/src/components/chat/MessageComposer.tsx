@@ -1,5 +1,7 @@
 import {
   FilePlus2,
+  FileText,
+  Image as ImageIcon,
   Mic,
   Paperclip,
   SendHorizontal,
@@ -26,6 +28,23 @@ import { VoiceRecorder } from "./VoiceRecorder";
 const EmojiPicker = lazy(() =>
   import("./EmojiPicker").then((module) => ({ default: module.EmojiPicker })),
 );
+
+function ReplyPreview({ message, onCancel }: { message: Message; onCancel: () => void }) {
+  const kind = message.attachment?.kind;
+  const who = message.sender === "me" ? "yourself" : message.senderName || "Unknown";
+  const excerpt = message.text || (kind === "image" ? "Photo" : kind === "audio" ? "Voice message" : message.attachment?.name) || "Original message unavailable";
+  const Icon = kind === "image" ? ImageIcon : kind === "audio" ? Mic : kind ? FileText : null;
+  return (
+    <div className="composer-reply" role="group" aria-label={`Replying to ${who}`}>
+      <span className="composer-reply-accent" aria-hidden="true" />
+      <div className="composer-reply-body">
+        <strong className="composer-reply-name">Replying to {who}</strong>
+        <span className="composer-reply-text">{Icon && <Icon size={13} aria-hidden="true" />}<span>{excerpt}</span></span>
+      </div>
+      <button type="button" className="composer-reply-cancel" aria-label="Cancel reply" title="Cancel reply" onClick={onCancel}><X size={16} /></button>
+    </div>
+  );
+}
 
 interface MessageComposerProps {
   disabled?: boolean;
@@ -191,7 +210,7 @@ export function MessageComposer({
 
   return (
     <div className="composer-wrap">
-      {replyTo && <div className="reply-preview composer-reply-preview"><strong>Replying to {replyTo.sender === "me" ? "You" : replyTo.senderName || "Unknown"}</strong><span>{replyTo.text || replyTo.attachment?.name || "Message"}</span><button type="button" aria-label="Cancel reply" onClick={onCancelReply}><X size={15} /></button></div>}
+      {replyTo && <ReplyPreview message={replyTo} onCancel={() => { onCancelReply?.(); textareaRef.current?.focus(); }} />}
       {error && <p className="composer-error" role="alert">{error}</p>}
       {uploadStatus && !voiceOpen && <p role="status">{uploadStatus}</p>}
             {file && (
