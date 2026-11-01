@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MessageComposer } from "./MessageComposer";
@@ -79,6 +80,27 @@ describe("VoiceRecorder", () => {
     expect(rec.durationMs).toBe(3100);
     expect(rec.blob.size).toBe(16);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("Strict Mode remount opens exactly one recorder and releases the superseded microphone stream", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const streamTracks: { stop: ReturnType<typeof vi.fn> }[] = [];
+    mockMic(async () => {
+      const t = { stop: vi.fn() };
+      streamTracks.push(t);
+      return { getTracks: () => [t] };
+    });
+    render(<StrictMode><VoiceRecorder onSend={onSend} onClose={vi.fn()} /></StrictMode>);
+    await flush();
+    expect(recorders.length).toBe(1);
+    expect(streamTracks.length).toBe(2);
+    expect(streamTracks[0].stop).toHaveBeenCalled(); // stale session's mic released
+    expect(streamTracks[1].stop).not.toHaveBeenCalled(); // live session still capturing
+    fireEvent.click(screen.getByLabelText("Pause recording"));
+    fireEvent.click(screen.getByLabelText("Stop and review recording"));
+    await waitFor(() => screen.getByLabelText("Play preview"));
+    await act(async () => { fireEvent.click(screen.getByLabelText("Send voice message")); });
+    expect(onSend.mock.calls[0][0].blob.size).toBe(16); // final chunk exactly once
   });
 
   it("collects the final chunk before the microphone is released", async () => {

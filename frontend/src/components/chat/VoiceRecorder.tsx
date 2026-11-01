@@ -65,6 +65,8 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
   const barsRef = useRef<number[]>([]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cancelledRef = useRef(false);
+  // Bumped on every start() and on unmount; async work from an older session must never touch shared state.
+  const sessionRef = useRef(0);
   const stopReasonRef = useRef("");
   const sendAfterStopRef = useRef(false);
   const sendingRef = useRef(false);
@@ -157,6 +159,8 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
   }, [maxDurationMs]);
 
   const start = useCallback(async () => {
+    const session = ++sessionRef.current;
+    const stale = () => sessionRef.current !== session || cancelledRef.current;
     cancelledRef.current = false;
     stopReasonRef.current = "";
     sendAfterStopRef.current = false;
@@ -179,12 +183,12 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch (cause) {
-      if (cancelledRef.current) return;
+      if (stale()) return;
       setError(permissionMessage(cause));
       setPhase("error");
       return;
     }
-    if (cancelledRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
+    if (stale()) { stream.getTracks().forEach((track) => track.stop()); return; }
     streamRef.current = stream;
 
     let recorder: MediaRecorder;
@@ -199,7 +203,7 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
     }
     recorderRef.current = recorder;
     recorder.ondataavailable = (event) => {
-      if (!event.data.size) return;
+      if (sessionRef.current !== session || !event.data.size) return;
       chunksRef.current.push(event.data);
       bytesRef.current += event.data.size;
       // Stop with headroom: the final chunk delivered by stop() must still fit under the limit.
@@ -209,6 +213,7 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
       }
     };
     recorder.onerror = () => {
+      if (sessionRef.current !== session) return;
       stopReasonRef.current = "error";
       releaseMic();
       setError("Recording failed. Please try again.");
@@ -216,6 +221,7 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
     };
     // 'stop' fires only after the final dataavailable, so the microphone is released here, not before.
     recorder.onstop = () => {
+      if (sessionRef.current !== session) { stream.getTracks().forEach((track) => track.stop()); return; }
       const reason = stopReasonRef.current;
       bankElapsed();
       const fallbackMs = Math.min(bankedMs.current, maxDurationMs);
@@ -264,6 +270,7 @@ export function VoiceRecorder({ onSend, onClose, status, maxDurationMs = MAX_VOI
     void start();
     return () => {
       cancelledRef.current = true;
+      sessionRef.current++;
       const recorder = recorderRef.current;
       if (recorder && recorder.state !== "inactive") recorder.stop();
       releaseMic();
