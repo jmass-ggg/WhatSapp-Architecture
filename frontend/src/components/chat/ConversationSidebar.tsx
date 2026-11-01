@@ -15,6 +15,8 @@ interface ConversationSidebarProps {
   conversations: Conversation[];
   selectedId?: string;
   matrixSession: MatrixSession | null;
+  /** "groups" shows a Groups title, a group-oriented action and no chat filters. */
+  mode?: "chats" | "groups";
   favoriteIds?: ReadonlySet<string>;
   pinnedIds?: ReadonlySet<string>;
   incomingRequests: UserConnection[];
@@ -39,6 +41,7 @@ export function ConversationSidebar({
   conversations,
   selectedId,
   matrixSession,
+  mode = "chats",
   favoriteIds = EMPTY_SET,
   pinnedIds = EMPTY_SET,
   incomingRequests,
@@ -105,20 +108,31 @@ export function ConversationSidebar({
         ? "No favorite conversations yet."
         : filter === "groups"
           ? "No groups yet."
-          : "No conversations yet.";
+          : mode === "groups"
+            ? "No groups yet. Use New group to create one."
+            : "No conversations yet.";
 
   return (
     <aside className="conversation-sidebar" aria-label="Conversations">
       <header className="sidebar-header">
-        <h1 className="sidebar-title">Chats</h1>
+        <h1 className="sidebar-title">{mode === "groups" ? "Groups" : "Chats"}</h1>
         <div className="sidebar-actions">
-          <button type="button" className="sidebar-icon-button" onClick={onNewGroup} aria-label="Create group" title="Create group">
-            <UsersRound size={18} />
-          </button>
-          <button type="button" className="new-chat-button" onClick={onNewChat} aria-label="New chat">
-            <Plus size={18} aria-hidden="true" />
-            New chat
-          </button>
+          {mode === "chats" && (
+            <button type="button" className="sidebar-icon-button" onClick={onNewGroup} aria-label="Create group" title="Create group">
+              <UsersRound size={18} />
+            </button>
+          )}
+          {mode === "groups" ? (
+            <button type="button" className="new-chat-button" onClick={onNewGroup} aria-label="Create group">
+              <Plus size={18} aria-hidden="true" />
+              New group
+            </button>
+          ) : (
+            <button type="button" className="new-chat-button" onClick={onNewChat} aria-label="New chat">
+              <Plus size={18} aria-hidden="true" />
+              New chat
+            </button>
+          )}
         </div>
       </header>
 
@@ -126,11 +140,12 @@ export function ConversationSidebar({
         <SearchInput
           value={query}
           onChange={setQuery}
-          placeholder="Search conversations…"
-          label="Search conversations"
+          placeholder={mode === "groups" ? "Search groups…" : "Search conversations…"}
+          label={mode === "groups" ? "Search groups" : "Search conversations"}
         />
       </div>
 
+      {mode === "chats" && (
       <div className="filter-chips" role="group" aria-label="Filter conversations">
         {filters.map(({ id, label }) => (
           <button
@@ -151,8 +166,9 @@ export function ConversationSidebar({
           </button>
         ))}
       </div>
+      )}
 
-      {(requestsLoading || requestError || incomingRequests.length > 0) && (
+      {mode === "chats" && (requestsLoading || requestError || incomingRequests.length > 0) && (
         <section className="connection-requests" aria-label="Connection requests">
           <h2 className="sidebar-list-heading">Requests ({incomingRequests.length})</h2>
           {requestsLoading ? (

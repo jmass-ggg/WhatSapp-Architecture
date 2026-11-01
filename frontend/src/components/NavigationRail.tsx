@@ -16,9 +16,9 @@ interface NavItem {
 
 const items: NavItem[] = [
   { id: "chats", label: "Chats", icon: MessageSquare, available: true },
-  { id: "groups", label: "Groups", icon: UsersRound, available: false },
-  { id: "channels", label: "Channels", icon: Hash, available: false },
-  { id: "contacts", label: "Contacts", icon: UserRound, available: false },
+  { id: "groups", label: "Groups", icon: UsersRound, available: true },
+  { id: "channels", label: "Channels", icon: Hash, available: true },
+  { id: "contacts", label: "Contacts", icon: UserRound, available: true },
   { id: "settings", label: "Settings", icon: Settings, available: false },
 ];
 

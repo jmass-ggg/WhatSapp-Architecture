@@ -34,6 +34,10 @@ export function App() {
           <Route element={<ProtectedRoute />}>
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/chat/:conversationId" element={<ChatPage />} />
+            <Route path="/groups" element={<ChatPage section="groups" />} />
+            <Route path="/groups/:conversationId" element={<ChatPage section="groups" />} />
+            <Route path="/contacts" element={<ChatPage section="contacts" />} />
+            <Route path="/channels" element={<ChatPage section="channels" />} />
           </Route>
           <Route path="/" element={<RootRedirect />} />
           <Route path="*" element={<NotFound />} />

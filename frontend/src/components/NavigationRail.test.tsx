@@ -10,7 +10,7 @@ const user = {
   id: "me", username: "maya", profile: { display_name: "Maya Chen", profile_picture_url: null },
 } as unknown as UserProfile;
 
-const setup = (active: "chats" | "channels" = "chats") => {
+const setup = (active: "chats" | "groups" | "channels" | "contacts" = "chats") => {
   const onNavigate = vi.fn();
   const onSignOut = vi.fn();
   render(<NavigationRail active={active} currentUser={user} matrixSession={null} onNavigate={onNavigate} onSignOut={onSignOut} />);
@@ -24,9 +24,12 @@ it("marks exactly one primary item as current", () => {
   expect(current[0].textContent).toContain("Chats");
 });
 
-it("disables sections that have no view yet instead of leaving dead buttons", () => {
-  setup();
-  expect((screen.getByRole("button", { name: /Channels/ }) as HTMLButtonElement).disabled).toBe(true);
+it("only highlights the active section and disables sections without a view", () => {
+  setup("channels");
+  const current = screen.getAllByRole("button").filter((b) => b.getAttribute("aria-current") === "page");
+  expect(current.map((b) => b.textContent)).toEqual(["Channels"]);
+  expect(screen.getByRole("button", { name: "Chats" }).getAttribute("aria-current")).toBeNull();
+  expect((screen.getByRole("button", { name: /Settings/ }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it("navigates to chats and signs out from the account menu", () => {

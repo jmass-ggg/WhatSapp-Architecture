@@ -4,7 +4,9 @@ import { EventType } from "matrix-js-sdk";
 
 import { AppLayout } from "../layouts/AppLayout";
 import { ConnectionBanner } from "../components/ConnectionBanner";
-import { NavigationRail } from "../components/NavigationRail";
+import { ChannelsView } from "../components/channels/ChannelsView";
+import { ContactsView } from "../components/contacts/ContactsView";
+import { NavigationRail, type NavSection } from "../components/NavigationRail";
 import { ConversationSidebar } from "../components/chat/ConversationSidebar";
 import { ChatHeader } from "../components/chat/ChatHeader";
 import { MessageComposer } from "../components/chat/MessageComposer";
@@ -72,7 +74,16 @@ function conversationForContact(connection: UserConnection): Conversation {
   };
 }
 
-export function ChatPage() {
+const SECTION_PATHS: Record<NavSection, string> = {
+  chats: "/chat",
+  groups: "/groups",
+  channels: "/channels",
+  contacts: "/contacts",
+  settings: "/chat",
+};
+
+export function ChatPage({ section = "chats" }: { section?: NavSection }) {
+  const basePath = section === "groups" ? "/groups" : "/chat";
   const { user, mode, matrixSession, api, signOut } = useAuth();
   const navigate = useNavigate();
   const { conversationId } = useParams<{ conversationId: string }>();
@@ -297,7 +308,7 @@ export function ChatPage() {
         }
         const roomId = await matrix.createGroup(name, unique.map(matrixUserIdForAppUserId));
         setDialog(null);
-        navigate(`/chat/${encodeURIComponent(roomId)}`);
+        navigate(`/groups/${encodeURIComponent(roomId)}`);
         notify(`Group "${name.trim()}" created. Invitations were sent.`, "success");
       })();
       groupCreationPromise.current = creation;
@@ -314,7 +325,7 @@ export function ChatPage() {
     async (conversation: Conversation) => {
       const contactUserId = conversation.contactUserId;
       if (!contactUserId || conversation.roomId) {
-        navigate(`/chat/${encodeURIComponent(conversation.id)}`);
+        navigate(`${basePath}/${encodeURIComponent(conversation.id)}`);
         return;
       }
       if (startingContactId) return;
@@ -335,7 +346,15 @@ export function ChatPage() {
         setStartingContactId(null);
       }
     },
-    [contacts.verifyAccepted, matrix.createDirect, matrix.initialSyncComplete, navigate, notify, startingContactId],
+    [basePath, contacts.verifyAccepted, matrix.createDirect, matrix.initialSyncComplete, navigate, notify, startingContactId],
+  );
+
+  const messageContact = useCallback(
+    (contact: UserConnection["other_user"]) => {
+      const target = conversations.find((conversation) => !conversation.isGroup && conversation.contactUserId === contact.id);
+      if (target) void selectConversation(target);
+    },
+    [conversations, selectConversation],
   );
 
   const acceptInvitation = useCallback(async () => {
@@ -364,13 +383,13 @@ export function ChatPage() {
     try {
       await declineGroupInvitation(client, selectedId);
       notify(`Invitation to "${selectedConversation.name}" declined.`, "success");
-      navigate("/chat");
+      navigate(basePath);
     } catch (cause) {
       notify(errorMessage(cause, "Could not decline the group invitation."), "error");
     } finally {
       setJoiningRoom(false);
     }
-  }, [client, navigate, notify, selectedConversation, selectedId]);
+  }, [basePath, client, navigate, notify, selectedConversation, selectedId]);
 
   const sendMessage = useCallback(
     async (text: string, file?: File) => {
@@ -457,17 +476,36 @@ export function ChatPage() {
 
   return (
     <AppLayout>
-      <div className={`chat-app${conversationId && selectedConversation ? " mobile-detail-open" : ""}${infoOpen && selectedConversation ? " has-info-panel" : ""}`}>
+      <div className={`chat-app${(section === "chats" || section === "groups") && conversationId && selectedConversation ? " mobile-detail-open" : ""}${infoOpen && selectedConversation ? " has-info-panel" : ""}`}>
         <NavigationRail
-          active="chats"
+          active={section}
           currentUser={user}
           matrixSession={matrixSession}
           presence={ownMatrixUserId ? presence[ownMatrixUserId] : undefined}
-          onNavigate={(section) => section === "chats" && navigate("/chat")}
+          onNavigate={(target) => target !== "settings" && navigate(SECTION_PATHS[target])}
           onSignOut={handleSignOut}
         />
+        {section === "contacts" && (
+          <ContactsView
+            connections={contacts.connections}
+            incomingRequests={contacts.incomingRequests}
+            outgoingRequests={contacts.outgoingRequests}
+            loading={contacts.loading}
+            error={contacts.error}
+            matrixSession={matrixSession}
+            respondingRequestId={respondingRequestId}
+            startingContactId={startingContactId}
+            onMessage={messageContact}
+            onAccept={(request) => void respondToRequest(request, "accept")}
+            onDecline={(request) => void respondToRequest(request, "decline")}
+            onAddContact={() => setDialog("chat")}
+          />
+        )}
+        {section === "channels" && <ChannelsView />}
+        {(section === "chats" || section === "groups") && (<>
         <ConversationSidebar
-          conversations={conversations}
+          mode={section === "groups" ? "groups" : "chats"}
+          conversations={section === "groups" ? conversations.filter((c) => c.isGroup) : conversations}
           selectedId={selectedId}
           matrixSession={matrixSession}
           favoriteIds={tags.favorites}
@@ -497,7 +535,7 @@ export function ChatPage() {
             onOpenInfo={() => setInfoOpen((open) => !open)}
             searchOpen={searchOpen}
             onToggleSearch={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
-            onBack={() => navigate("/chat")}
+            onBack={() => navigate(basePath)}
           />
 
           {searchOpen && selectedConversation && (
@@ -635,6 +673,7 @@ export function ChatPage() {
             onClose={() => setInfoOpen(false)}
           />
         )}
+        </>)}
       </div>
 
       <NewConversationDialog
