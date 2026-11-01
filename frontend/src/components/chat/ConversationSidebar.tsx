@@ -1,7 +1,6 @@
 import { LogOut, MessageSquarePlus, UsersRound } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { Brand } from "../Brand";
 import { SearchInput } from "../SearchInput";
 import { UserAvatar } from "../UserAvatar";
 import { ConversationListItem } from "./ConversationListItem";
@@ -86,7 +85,7 @@ export function ConversationSidebar({
   return (
     <aside className="conversation-sidebar" aria-label="Conversations">
       <header className="sidebar-header">
-        <Brand />
+        <h1 className="sidebar-title">Chats</h1>
         <div className="sidebar-actions">
           <button type="button" className="sidebar-icon-button" onClick={onNewChat} aria-label="New chat" title="New chat">
             <MessageSquarePlus size={18} />

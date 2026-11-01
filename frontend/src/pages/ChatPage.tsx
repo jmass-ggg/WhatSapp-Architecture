@@ -4,6 +4,7 @@ import { EventType } from "matrix-js-sdk";
 
 import { AppLayout } from "../layouts/AppLayout";
 import { ConnectionBanner } from "../components/ConnectionBanner";
+import { NavigationRail } from "../components/NavigationRail";
 import { ConversationSidebar } from "../components/chat/ConversationSidebar";
 import { ChatHeader } from "../components/chat/ChatHeader";
 import { MessageComposer } from "../components/chat/MessageComposer";
@@ -368,6 +369,13 @@ export function ChatPage() {
   return (
     <AppLayout>
       <div className={`chat-app${conversationId && selectedConversation ? " mobile-detail-open" : ""}`}>
+        <NavigationRail
+          active="chats"
+          currentUser={user}
+          matrixSession={matrixSession}
+          presence={ownMatrixUserId ? presence[ownMatrixUserId] : undefined}
+          onNavigate={(section) => section === "chats" && navigate("/chat")}
+        />
         <ConversationSidebar
           conversations={conversations}
           selectedId={selectedId}
