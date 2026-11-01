@@ -1,4 +1,4 @@
-import { Check, CheckCheck, Clock3, MoreHorizontal, Pin, PinOff, Reply } from "lucide-react";
+import { Check, CheckCheck, Clock3, MoreHorizontal, Pin, PinOff, Reply, Star } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -21,6 +21,8 @@ interface MessageBubbleProps {
   isPinned?: boolean;
   canManagePins?: boolean;
   canPinNewMessage?: boolean;
+  isStarred?: boolean;
+  onToggleStar?: (eventId: string) => void;
   onTogglePin?: (eventId: string) => void;
 }
 
@@ -65,6 +67,8 @@ export function MessageBubble({
   isPinned = false,
   canManagePins = false,
   canPinNewMessage = true,
+  isStarred = false,
+  onToggleStar,
   onTogglePin,
 }: MessageBubbleProps) {
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -196,6 +200,11 @@ export function MessageBubble({
           )}
           {message.text && <p className="message-text">{message.text}</p>}
           <span className="message-meta">
+            {isStarred && (
+              <span className="message-pin-indicator" title="Starred message">
+                <Star size={12} fill="currentColor" aria-label="Starred message" />
+              </span>
+            )}
             {isPinned && (
               <span className="message-pin-indicator" title="Pinned message">
                 <Pin size={12} aria-label="Pinned message" />
@@ -218,7 +227,7 @@ export function MessageBubble({
           </span>
         </div>
         {hasPersistedEventId && message.delivery !== "sending" &&
-          (onReply || canChangePins) && (
+          (onReply || canChangePins || onToggleStar) && (
             <div className="message-actions" ref={actionsRef}>
               <button
                 ref={actionTriggerRef}
@@ -260,6 +269,20 @@ export function MessageBubble({
                     >
                       <Reply size={15} />
                       <span>Reply</span>
+                    </button>
+                  )}
+                  {onToggleStar && eventId && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setActionsOpen(false);
+                        actionTriggerRef.current?.focus();
+                        onToggleStar(eventId);
+                      }}
+                    >
+                      <Star size={15} fill={isStarred ? "currentColor" : "none"} />
+                      <span>{isStarred ? "Unstar message" : "Star message"}</span>
                     </button>
                   )}
                   {canChangePins && (

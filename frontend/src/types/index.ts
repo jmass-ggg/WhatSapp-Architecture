@@ -125,6 +125,10 @@ export interface Conversation {
   unreadCount: number;
   messages: Message[];
   bio?: string;
+  /** Profile fields of a direct-message contact (from the connections API). */
+  jobTitle?: string;
+  department?: string;
+  about?: string;
   isGroup?: boolean;
   isInvited?: boolean;
   roomId?: string;

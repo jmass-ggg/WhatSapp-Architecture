@@ -9,6 +9,7 @@ import { ConversationSidebar } from "../components/chat/ConversationSidebar";
 import { ChatHeader } from "../components/chat/ChatHeader";
 import { MessageComposer } from "../components/chat/MessageComposer";
 import { MessageList, type MessageListHandle } from "../components/chat/MessageList";
+import { ConversationInfoPanel, type StarredEntry } from "../components/chat/ConversationInfoPanel";
 import { RoomSearchBar } from "../components/chat/RoomSearchBar";
 import { PinnedMessageBanner } from "../components/chat/PinnedMessageBanner";
 import { NewConversationDialog } from "../components/chat/NewConversationDialog";
@@ -18,6 +19,7 @@ import { useMatrixContext } from "../context/MatrixContext";
 import { useConnections } from "../hooks/useConnections";
 import { useMatrixRooms } from "../hooks/useMatrixRooms";
 import { usePinnedMessages } from "../hooks/usePinnedMessages";
+import { useStarredMessages } from "../hooks/useStarredMessages";
 import { useRoomTags } from "../hooks/useRoomTags";
 import { useReadReceipts } from "../hooks/useReadReceipts";
 import { sendAttachment } from "../services/matrix/attachments";
@@ -28,6 +30,8 @@ import {
   declineGroupInvitation,
   sendTextMessage,
 } from "../services/matrix/messaging";
+import { roomMembers, roomTopic } from "../services/matrix/members";
+import { extractSharedContent } from "../services/matrix/sharedContent";
 import { hasOlderHistory, loadOlderMessages } from "../services/matrix/history";
 import { loadMatrixMessage } from "../services/matrix/messageNavigation";
 import { canManagePinnedMessages, getPinnedEventIds, updatePinnedEvent } from "../services/matrix/pinning";
@@ -61,6 +65,9 @@ function conversationForContact(connection: UserConnection): Conversation {
     unreadCount: 0,
     messages: [],
     bio: contact.profile?.bio ?? "Contact",
+    jobTitle: contact.profile?.job_title ?? undefined,
+    department: contact.profile?.department ?? undefined,
+    about: contact.profile?.bio ?? undefined,
     isGroup: false,
   };
 }
@@ -72,6 +79,7 @@ export function ChatPage() {
   const matrix = useMatrixRooms();
   const { client, presence } = useMatrixContext();
   const tags = useRoomTags(client, matrix.rooms);
+  const starred = useStarredMessages(client);
   const contacts = useConnections(api, mode === "live" ? user?.id : undefined);
 
   const [dialog, setDialog] = useState<null | "chat" | "group">(null);
@@ -82,6 +90,7 @@ export function ChatPage() {
   const [joiningRoom, setJoiningRoom] = useState(false);
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const [startingContactId, setStartingContactId] = useState<string | null>(null);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -113,6 +122,9 @@ export function ChatPage() {
         presence: room.matrixUserId ? presence[room.matrixUserId] ?? "unknown" : "unknown",
         name: contact?.profile?.display_name || contact?.username || room.name,
         username: contact?.username || room.username,
+        jobTitle: contact?.profile?.job_title ?? undefined,
+        department: contact?.profile?.department ?? undefined,
+        about: contact?.profile?.bio ?? undefined,
         avatarUrl: contact?.profile?.profile_picture_url ?? room.avatarUrl,
       };
     });
@@ -134,6 +146,7 @@ export function ChatPage() {
   useEffect(() => {
     setReplyTo(null);
     setSearchOpen(false);
+    setInfoOpen(false);
     setSearchTerm("");
   }, [selectedId]);
 
@@ -162,6 +175,30 @@ export function ChatPage() {
     selectedRoom,
     selectedConversation?.isGroup ? "A participant" : selectedConversation?.name ?? "Contact",
     selectedConversation?.messages,
+  );
+  const shared = useMemo(
+    () => extractSharedContent(selectedConversation?.messages ?? []),
+    [selectedConversation?.messages],
+  );
+  const starredInRoom = useMemo<StarredEntry[]>(() => {
+    if (!selectedId) return [];
+    const byId = new Map(
+      (selectedConversation?.messages ?? []).flatMap((m) => (m.matrix ? [[m.matrix.eventId, m] as const] : [])),
+    );
+    return starred.refs
+      .filter((ref) => ref.roomId === selectedId)
+      .map<StarredEntry>(({ eventId }) => {
+        const message = byId.get(eventId);
+        return message
+          ? { eventId, text: message.text, senderName: message.sender === "me" ? "You" : message.senderName ?? selectedConversation?.name, sentAt: message.sentAt }
+          : { eventId };
+      });
+  }, [selectedConversation?.messages, selectedConversation?.name, selectedId, starred.refs]);
+  const starredEventIds = useMemo(() => new Set(starredInRoom.map((entry) => entry.eventId)), [starredInRoom]);
+  const members = useMemo(
+    () => (selectedRoom && selectedConversation?.isGroup ? roomMembers(selectedRoom) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedRoom, selectedConversation?.isGroup, selectedConversation?.messages, matrix.rooms],
   );
   const canManagePins = canManagePinnedMessages(selectedRoom, ownMatrixUserId);
   useEffect(() => setActivePinnedIndex(0), [selectedId]);
@@ -364,6 +401,18 @@ export function ChatPage() {
     [canSend, client, contacts.verifyAccepted, replyTo, selectedConversation],
   );
 
+  const toggleStar = useCallback(
+    async (eventId: string) => {
+      if (!selectedId) return;
+      try {
+        await starred.toggle({ roomId: selectedId, eventId });
+      } catch (cause) {
+        notify(errorMessage(cause, "Starred messages could not be updated."), "error");
+      }
+    },
+    [notify, selectedId, starred.toggle],
+  );
+
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchTerm("");
@@ -408,7 +457,7 @@ export function ChatPage() {
 
   return (
     <AppLayout>
-      <div className={`chat-app${conversationId && selectedConversation ? " mobile-detail-open" : ""}`}>
+      <div className={`chat-app${conversationId && selectedConversation ? " mobile-detail-open" : ""}${infoOpen && selectedConversation ? " has-info-panel" : ""}`}>
         <NavigationRail
           active="chats"
           currentUser={user}
@@ -444,6 +493,8 @@ export function ChatPage() {
             canTag={Boolean(selectedConversation?.roomId)}
             onToggleFavorite={() => void toggleTag(tags.toggleFavorite, "favorite")}
             onTogglePinned={() => void toggleTag(tags.togglePinned, "pin")}
+            infoOpen={infoOpen}
+            onOpenInfo={() => setInfoOpen((open) => !open)}
             searchOpen={searchOpen}
             onToggleSearch={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
             onBack={() => navigate("/chat")}
@@ -522,6 +573,8 @@ export function ChatPage() {
             searchOpen={searchOpen}
             conversationRouteId={conversationId}
             onReply={setReplyTo}
+            starredEventIds={starredEventIds}
+            onToggleStar={(eventId) => void toggleStar(eventId)}
             ownAvatar={{
               name: user.profile.display_name || user.username,
               avatarUrl: user.profile.profile_picture_url,
@@ -555,6 +608,33 @@ export function ChatPage() {
             />
           )}
         </section>
+
+        {infoOpen && selectedConversation && (
+          <ConversationInfoPanel
+            conversation={selectedConversation}
+            matrixSession={matrixSession}
+            shared={shared}
+            starred={starredInRoom}
+            members={members}
+            topic={selectedRoom && selectedConversation.isGroup ? roomTopic(selectedRoom) : undefined}
+            isFavorite={Boolean(selectedId && tags.favorites.has(selectedId))}
+            canTag={Boolean(selectedConversation.roomId)}
+            canLoadOlder={Boolean(selectedRoom && hasOlderHistory(selectedRoom))}
+            loadingOlder={loadingOlder}
+            onLoadOlder={() => void loadOlder()}
+            onToggleFavorite={() => void toggleTag(tags.toggleFavorite, "favorite")}
+            onSearch={() => {
+              setSearchOpen(true);
+              if (window.matchMedia("(max-width: 1023px)").matches) setInfoOpen(false);
+            }}
+            onOpenMessage={(eventId) => {
+              if (window.matchMedia("(max-width: 1023px)").matches) setInfoOpen(false);
+              void messageListRef.current?.jumpTo(eventId);
+            }}
+            onNotify={notify}
+            onClose={() => setInfoOpen(false)}
+          />
+        )}
       </div>
 
       <NewConversationDialog

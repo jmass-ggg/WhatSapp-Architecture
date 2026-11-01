@@ -17,6 +17,8 @@ interface MessageListProps {
   matrixSession: MatrixSession | null;
   searchTerm: string;
   ownAvatar?: { name: string; avatarUrl?: string | null };
+  starredEventIds?: ReadonlySet<string>;
+  onToggleStar?: (eventId: string) => void;
   searchOpen: boolean;
   conversationRouteId?: string;
   onReply?: (message: Message) => void;
@@ -75,6 +77,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   matrixSession,
   searchTerm,
   ownAvatar,
+  starredEventIds,
+  onToggleStar,
   searchOpen,
   conversationRouteId,
   onReply,
@@ -232,6 +236,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 conversation={conversation}
                 matrixSession={matrixSession}
                 ownAvatar={ownAvatar}
+                isStarred={Boolean(message.matrix?.eventId && starredEventIds?.has(message.matrix.eventId))}
+                onToggleStar={onToggleStar}
                 onReply={onReply}
                 isPinned={Boolean(message.matrix?.eventId && pinnedEventIds.has(message.matrix.eventId))}
                 canManagePins={canManagePins}
