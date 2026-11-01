@@ -144,4 +144,15 @@ describe("Matrix event conversion", () => {
       ),
     ).toBeNull();
   });
+
+  it("parses incoming m.audio events as audio attachments with duration and reply", () => {
+    const message = messageFromMatrixEvent(event("m.room.message", {
+      msgtype: "m.audio", body: "Voice message", url: "mxc://localhost/abc",
+      info: { mimetype: "audio/ogg", size: 4096, duration: 7500 },
+      "m.relates_to": { "m.in_reply_to": { event_id: "$parent" } },
+    }), "!room:localhost", "@me:localhost");
+    expect(message?.sender).toBe("them");
+    expect(message?.replyTo?.eventId).toBe("$parent");
+    expect(message?.attachment).toMatchObject({ kind: "audio", mediaUri: "mxc://localhost/abc", mimeType: "audio/ogg", size: 4096, durationMs: 7500 });
+  });
 });

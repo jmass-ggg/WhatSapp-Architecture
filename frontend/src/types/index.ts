@@ -74,7 +74,9 @@ export interface Attachment {
   name: string;
   size?: number;
   mimeType?: string;
-  kind: "image" | "file";
+  kind: "image" | "file" | "audio";
+  /** Audio duration in milliseconds, when the sender provided it. */
+  durationMs?: number;
   url?: string;
   mediaUri?: string;
 }

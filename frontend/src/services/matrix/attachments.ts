@@ -52,3 +52,59 @@ export async function sendAttachment(
   });
   progress?.("Sent");
 }
+
+export const MAX_VOICE_DURATION_MS = 120_000;
+/** Preferred recorder formats, best first; the browser picks the first it supports. */
+export const VOICE_RECORDING_TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4", "audio/webm"];
+const VOICE_EXTENSIONS: Record<string, string> = { "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a" };
+
+export interface VoiceRecording { blob: Blob; mimeType: string; durationMs: number }
+/** Per-recording state kept across retries so an uncertain send is never duplicated. */
+export interface VoiceSendAttempt { txnId?: string; contentUri?: string }
+
+export const baseMimeType = (type: string) => type.split(";")[0].trim().toLowerCase();
+
+export async function validateVoiceRecording(recording: VoiceRecording): Promise<string> {
+  const mime = baseMimeType(recording.mimeType || recording.blob.type);
+  if (!VOICE_EXTENSIONS[mime]) throw new Error("This browser recorded an unsupported audio format.");
+  if (!recording.blob.size) throw new Error("The recording is empty.");
+  if (recording.blob.size > MAX_ATTACHMENT_BYTES) throw new Error("The recording exceeds the 20 MiB limit.");
+  if (!Number.isFinite(recording.durationMs) || recording.durationMs <= 0 || recording.durationMs > MAX_VOICE_DURATION_MS + 1000) {
+    throw new Error("The recording duration is invalid.");
+  }
+  const head = new Uint8Array(await recording.blob.slice(0, 12).arrayBuffer());
+  const ok = mime === "audio/webm" ? prefix(head, [0x1a, 0x45, 0xdf, 0xa3])
+    : mime === "audio/ogg" ? prefix(head, [0x4f, 0x67, 0x67, 0x53])
+    : prefix(head.slice(4), [0x66, 0x74, 0x79, 0x70]);
+  if (!ok) throw new Error("The recording data does not match its audio format.");
+  return mime;
+}
+
+export async function sendVoiceMessage(
+  client: MatrixClient, roomId: string, recording: VoiceRecording, replyEventId?: string,
+  progress?: (status: string) => void, attempt: VoiceSendAttempt = {},
+): Promise<void> {
+  progress?.("Preparing audio");
+  const mime = await validateVoiceRecording(recording);
+  const size = recording.blob.size;
+  if (!attempt.contentUri) {
+    const file = new File([recording.blob], `voice-message.${VOICE_EXTENSIONS[mime]}`, { type: mime });
+    progress?.("Uploading: 0%");
+    const uploaded = await client.uploadContent(file, {
+      type: mime,
+      progressHandler: ({ loaded, total }) => progress?.(`Uploading: ${Math.min(100, Math.round(100 * loaded / (total || size)))}%`),
+    });
+    attempt.contentUri = uploaded.content_uri;
+  }
+  progress?.("Sending message");
+  // A stable transaction id lets Synapse de-duplicate a retry whose first response was lost.
+  attempt.txnId ??= `lumachat-voice-${globalThis.crypto.randomUUID()}`;
+  await client.sendMessage(roomId, {
+    msgtype: MsgType.Audio,
+    body: "Voice message",
+    url: attempt.contentUri,
+    info: { mimetype: mime, size, duration: Math.round(recording.durationMs) },
+    ...(replyEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyEventId } } } : {}),
+  }, attempt.txnId);
+  progress?.("Sent");
+}

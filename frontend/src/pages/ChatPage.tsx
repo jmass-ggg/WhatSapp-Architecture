@@ -24,7 +24,7 @@ import { usePinnedMessages } from "../hooks/usePinnedMessages";
 import { useStarredMessages } from "../hooks/useStarredMessages";
 import { useRoomTags } from "../hooks/useRoomTags";
 import { useReadReceipts } from "../hooks/useReadReceipts";
-import { sendAttachment } from "../services/matrix/attachments";
+import { sendAttachment, sendVoiceMessage, type VoiceRecording, type VoiceSendAttempt } from "../services/matrix/attachments";
 import { matrixUserIdForAppUserId } from "../services/matrix/identity";
 import {
   acceptGroupInvitation,
@@ -391,18 +391,21 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
     }
   }, [basePath, client, navigate, notify, selectedConversation, selectedId]);
 
+  const prepareSend = useCallback(async () => {
+    if (!selectedConversation || !client) throw new Error("Select a conversation first.");
+    if (!selectedConversation.isGroup) {
+      if (!selectedConversation.connectionAllowed || !selectedConversation.connectionUserId) {
+        throw new Error("Accept a connection request before sending a direct message.");
+      }
+      await contacts.verifyAccepted(selectedConversation.connectionUserId);
+      if (!canSend) throw new Error("Both users must join the room before messaging.");
+    }
+    return { client, roomId: selectedConversation.roomId ?? selectedConversation.id, replyEventId: replyTo?.matrix?.eventId };
+  }, [canSend, client, contacts.verifyAccepted, replyTo, selectedConversation]);
+
   const sendMessage = useCallback(
     async (text: string, file?: File) => {
-      if (!selectedConversation || !client) throw new Error("Select a conversation first.");
-      if (!selectedConversation.isGroup) {
-        if (!selectedConversation.connectionAllowed || !selectedConversation.connectionUserId) {
-          throw new Error("Accept a connection request before sending a direct message.");
-        }
-        await contacts.verifyAccepted(selectedConversation.connectionUserId);
-        if (!canSend) throw new Error("Both users must join the room before messaging.");
-      }
-      const roomId = selectedConversation.roomId ?? selectedConversation.id;
-      const replyEventId = replyTo?.matrix?.eventId;
+      const { client, roomId, replyEventId } = await prepareSend();
       if (file) {
         try {
           assertSendReady(client, roomId, replyEventId);
@@ -417,8 +420,31 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
       }
       setReplyTo(null);
     },
-    [canSend, client, contacts.verifyAccepted, replyTo, selectedConversation],
+    [prepareSend],
   );
+
+  const sendVoice = useCallback(
+    async (recording: VoiceRecording, attempt: VoiceSendAttempt) => {
+      const { client, roomId, replyEventId } = await prepareSend();
+      try {
+        assertSendReady(client, roomId, replyEventId);
+        await sendVoiceMessage(client, roomId, recording, replyEventId, setAttachmentProgress, attempt);
+      } catch (error) {
+        setAttachmentProgress("Upload failed");
+        throw error;
+      }
+      setReplyTo(null);
+    },
+    [prepareSend],
+  );
+
+  // Completed upload feedback is transient; real delivery state lives on the message itself.
+  useEffect(() => {
+    if (attachmentProgress !== "Sent") return;
+    const timer = setTimeout(() => setAttachmentProgress(""), 2000);
+    return () => clearTimeout(timer);
+  }, [attachmentProgress]);
+  useEffect(() => setAttachmentProgress(""), [selectedId]);
 
   const toggleStar = useCallback(
     async (eventId: string) => {
@@ -643,6 +669,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
               placeholder={canSend ? "Write a message…" : "Messaging is unavailable"}
               hint={composerHint}
               onSend={sendMessage}
+              onSendVoice={sendVoice}
             />
           )}
         </section>

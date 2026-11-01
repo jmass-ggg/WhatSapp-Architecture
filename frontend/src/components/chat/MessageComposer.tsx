@@ -1,5 +1,6 @@
 import {
   FilePlus2,
+  Mic,
   Paperclip,
   SendHorizontal,
   Smile,
@@ -19,7 +20,8 @@ import {
 } from "react";
 import type { MatrixClient } from "matrix-js-sdk";
 import type { Message } from "../../types";
-import { validateAttachment } from "../../services/matrix/attachments";
+import { validateAttachment, type VoiceRecording, type VoiceSendAttempt } from "../../services/matrix/attachments";
+import { VoiceRecorder } from "./VoiceRecorder";
 
 const EmojiPicker = lazy(() =>
   import("./EmojiPicker").then((module) => ({ default: module.EmojiPicker })),
@@ -32,6 +34,8 @@ interface MessageComposerProps {
   placeholder?: string;
   hint?: string;
   onSend: (text: string, file?: File) => Promise<void>;
+  /** Enables the microphone button; must resolve only after the message was acknowledged. */
+  onSendVoice?: (recording: VoiceRecording, attempt: VoiceSendAttempt) => Promise<void>;
   typingClient?: MatrixClient | null;
   typingRoomId?: string;
   typingAllowed?: boolean;
@@ -47,6 +51,7 @@ export function MessageComposer({
   placeholder = "Write a message…",
   hint = "Enter to send · Shift + Enter for a new line",
   onSend,
+  onSendVoice,
   typingClient,
   typingRoomId,
   typingAllowed = false,
@@ -60,11 +65,12 @@ export function MessageComposer({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiAnchorRef = useRef<HTMLDivElement>(null);
   const pendingEmojiSelection = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const isBusy = busy || sending;
+  const isBusy = busy || sending || voiceOpen;
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const typingActive = useRef(false);
@@ -187,8 +193,8 @@ export function MessageComposer({
     <div className="composer-wrap">
       {replyTo && <div className="reply-preview composer-reply-preview"><strong>Replying to {replyTo.sender === "me" ? "You" : replyTo.senderName || "Unknown"}</strong><span>{replyTo.text || replyTo.attachment?.name || "Message"}</span><button type="button" aria-label="Cancel reply" onClick={onCancelReply}><X size={15} /></button></div>}
       {error && <p className="composer-error" role="alert">{error}</p>}
-      {uploadStatus && <p role="status">{uploadStatus}</p>}
-      {file && (
+      {uploadStatus && !voiceOpen && <p role="status">{uploadStatus}</p>}
+            {file && (
         <div className="pending-attachment">
           {filePreview ? <img src={filePreview} alt="Selected attachment preview" className="pending-attachment-preview" /> : <FilePlus2 size={16} />}
           <span>{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MiB</span>
@@ -204,6 +210,9 @@ export function MessageComposer({
           </button>
         </div>
       )}
+      {voiceOpen && onSendVoice ? (
+        <VoiceRecorder onSend={onSendVoice} onClose={() => setVoiceOpen(false)} status={uploadStatus} />
+      ) : (<>
       <form className="message-composer" onSubmit={handleSubmit}>
         <div className="composer-tools">
           <div className="emoji-anchor" ref={emojiAnchorRef}>
@@ -230,6 +239,18 @@ export function MessageComposer({
                 onSelect={insertEmoji}
               />
             </Suspense>
+          )}
+          {onSendVoice && (
+            <button
+              className={`composer-tool${voiceOpen ? " is-active" : ""}`}
+              type="button"
+              aria-label="Record a voice message"
+              title="Record a voice message"
+              onClick={() => setVoiceOpen(true)}
+              disabled={disabled || isBusy}
+            >
+              <Mic size={20} />
+            </button>
           )}
           {!attachmentsDisabled && (
             <>
@@ -281,6 +302,7 @@ export function MessageComposer({
         </button>
       </form>
       <span className="composer-hint">{hint}</span>
+      </>)}
     </div>
   );
 }

@@ -179,7 +179,7 @@ export function MessageBubble({
         {!outgoing && conversation.isGroup && message.senderName && (
           <span className="message-sender">{message.senderName}</span>
         )}
-        <div className={`message-bubble${message.attachment ? " has-attachment" : ""}`}>
+        <div className={`message-bubble${message.attachment ? " has-attachment" : ""}${message.attachment?.kind === "audio" ? " has-audio" : ""}`}>
           {message.replyTo && (
             <button
               type="button"

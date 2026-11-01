@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { fetchMatrixMedia } from "../../services/matrix/media";
 import { MAX_ATTACHMENT_BYTES } from "../../services/matrix/attachments";
+import { AudioMessagePlayer } from "./AudioMessagePlayer";
 import type { Attachment } from "../../types";
 
 interface AttachmentCardProps {
@@ -20,9 +21,11 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
   const [mediaSource, setMediaSource] = useState<string | null>(attachment.url ?? null);
   const [loadError, setLoadError] = useState(false);
   const isImage = attachment.kind === "image";
+  const isAudio = attachment.kind === "audio";
 
   useEffect(() => {
     setLoadError(false);
+    if (isAudio) return; // the audio player fetches its own media
     if (!attachment.mediaUri || !matrixToken) {
       setMediaSource(attachment.url ?? null);
       return;
@@ -44,7 +47,9 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.mediaUri, attachment.mimeType, attachment.url, matrixToken, isImage]);
+  }, [attachment.mediaUri, attachment.mimeType, attachment.url, matrixToken, isImage, isAudio]);
+
+  if (isAudio) return <AudioMessagePlayer attachment={attachment} matrixToken={matrixToken} />;
 
   if (isImage) {
     return (

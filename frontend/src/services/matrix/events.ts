@@ -87,11 +87,12 @@ export function messageFromMatrixEvent(
     ...(isFile
       ? {
           attachment: {
-            name: body || (messageType === "m.image" ? "Shared image" : "Shared file"),
+            name: body || (messageType === "m.image" ? "Shared image" : messageType === "m.audio" ? "Voice message" : "Shared file"),
             size: typeof info.size === "number" ? info.size : undefined,
             mimeType:
               typeof info.mimetype === "string" ? info.mimetype : undefined,
-            kind: messageType === "m.image" ? ("image" as const) : ("file" as const),
+            kind: messageType === "m.image" ? ("image" as const) : messageType === "m.audio" ? ("audio" as const) : ("file" as const),
+            ...(messageType === "m.audio" && typeof info.duration === "number" && info.duration > 0 ? { durationMs: info.duration } : {}),
             mediaUri,
           },
         }
