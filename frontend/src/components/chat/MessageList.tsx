@@ -16,6 +16,7 @@ interface MessageListProps {
   conversation: Conversation | null;
   matrixSession: MatrixSession | null;
   searchTerm: string;
+  ownAvatar?: { name: string; avatarUrl?: string | null };
   searchOpen: boolean;
   conversationRouteId?: string;
   onReply?: (message: Message) => void;
@@ -73,6 +74,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   conversation,
   matrixSession,
   searchTerm,
+  ownAvatar,
   searchOpen,
   conversationRouteId,
   onReply,
@@ -229,6 +231,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 message={message}
                 conversation={conversation}
                 matrixSession={matrixSession}
+                ownAvatar={ownAvatar}
                 onReply={onReply}
                 isPinned={Boolean(message.matrix?.eventId && pinnedEventIds.has(message.matrix.eventId))}
                 canManagePins={canManagePins}

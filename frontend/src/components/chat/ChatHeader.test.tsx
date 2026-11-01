@@ -45,3 +45,23 @@ it("offers a back button for mobile", () => {
   fireEvent.click(screen.getByRole("button", { name: "Back to conversations" }));
   expect(onBack).toHaveBeenCalled();
 });
+
+it("exposes search, favorite, pin and info actions only when they are implemented", () => {
+  const handlers = { onToggleSearch: vi.fn(), onToggleFavorite: vi.fn(), onTogglePinned: vi.fn(), onOpenInfo: vi.fn() };
+  const quiet = { ...conversation, isTyping: false };
+  const view = render(<ChatHeader conversation={quiet} matrixSession={null} onBack={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: /Search in conversation|favorites|More actions/ })).toBeNull();
+  view.unmount();
+
+  render(<ChatHeader conversation={quiet} matrixSession={null} canTag onBack={vi.fn()} {...handlers} />);
+  fireEvent.click(screen.getByRole("button", { name: "Search in conversation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open details for Alice" }));
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Pin conversation" }));
+  expect(handlers.onToggleSearch).toHaveBeenCalled();
+  expect(handlers.onToggleFavorite).toHaveBeenCalled();
+  expect(handlers.onOpenInfo).toHaveBeenCalled();
+  expect(handlers.onTogglePinned).toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: /call/i })).toBeNull();
+});

@@ -191,3 +191,17 @@ it("keeps group sender labels, replies, and event timestamps visible", () => {
     sentAt.toISOString(),
   );
 });
+
+it("shows the sender avatar beside incoming and the user's avatar beside outgoing messages", () => {
+  const conversation = { id: "!r", name: "Alice", initials: "AL", accent: 0, isGroup: false } as Conversation;
+  const base = { id: "$1", text: "Hi", sentAt: new Date(1_750_000_000_000), delivery: "sent" } as Message;
+  const view = render(
+    <MessageBubble message={{ ...base, sender: "them" }} conversation={conversation} matrixSession={null} ownAvatar={{ name: "Maya Chen" }} />,
+  );
+  expect(view.container.querySelectorAll(".message-avatar")).toHaveLength(1);
+  expect(view.container.querySelector(".message-avatar")?.textContent).toContain("AL");
+  view.rerender(
+    <MessageBubble message={{ ...base, sender: "me" }} conversation={conversation} matrixSession={null} ownAvatar={{ name: "Maya Chen" }} />,
+  );
+  expect(view.container.querySelector(".message-avatar")?.textContent).toContain("MC");
+});

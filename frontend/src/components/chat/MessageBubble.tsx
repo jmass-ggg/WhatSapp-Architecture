@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
+import { UserAvatar } from "../UserAvatar";
 import { AttachmentCard } from "./AttachmentCard";
 import type { Conversation, MatrixSession, Message } from "../../types";
 
@@ -14,6 +15,7 @@ interface MessageBubbleProps {
   message: Message;
   conversation: Conversation;
   matrixSession: MatrixSession | null;
+  ownAvatar?: { name: string; avatarUrl?: string | null };
   onReply?: (message: Message) => void;
   onJump?: (eventId: string) => void;
   isPinned?: boolean;
@@ -38,6 +40,10 @@ function formatFullMessageTime(date?: Date): string | undefined {
   }).format(date);
 }
 
+function initialsOf(name: string): string {
+  return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?";
+}
+
 function Receipt({ delivery }: { delivery: Message["delivery"] }) {
   if (delivery === "sending") return <Clock3 size={13} aria-label="Sending" />;
   if (delivery === "failed") return <span className="message-failed">Not sent</span>;
@@ -53,6 +59,7 @@ export function MessageBubble({
   message,
   conversation,
   matrixSession,
+  ownAvatar,
   onReply,
   onJump,
   isPinned = false,
@@ -153,6 +160,17 @@ export function MessageBubble({
       data-event-type={message.matrix?.eventType || undefined}
       data-sender-id={message.matrix?.senderId || undefined}
     >
+      {!outgoing && (
+        <UserAvatar
+          className="message-avatar"
+          size="sm"
+          name={conversation.isGroup ? message.senderName || "Group member" : conversation.name}
+          initials={conversation.isGroup ? initialsOf(message.senderName || "") : conversation.initials}
+          accent={conversation.accent}
+          avatarUrl={conversation.isGroup ? undefined : conversation.avatarUrl}
+          matrixToken={matrixSession?.access_token}
+        />
+      )}
       <div className="message-content-wrap">
         {!outgoing && conversation.isGroup && message.senderName && (
           <span className="message-sender">{message.senderName}</span>
@@ -277,6 +295,16 @@ export function MessageBubble({
           </button>
         )}
       </div>
+      {outgoing && ownAvatar && (
+        <UserAvatar
+          className="message-avatar"
+          size="sm"
+          name={ownAvatar.name}
+          initials={initialsOf(ownAvatar.name)}
+          avatarUrl={ownAvatar.avatarUrl}
+          matrixToken={matrixSession?.access_token}
+        />
+      )}
     </article>
   );
 }

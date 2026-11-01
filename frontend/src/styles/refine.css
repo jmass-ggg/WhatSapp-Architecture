@@ -192,3 +192,24 @@ button.chat-header-identity:hover h1 { color: var(--blue); }
 .send-button { width: 42px; height: 42px; border-radius: 12px; box-shadow: none; }
 .send-button:hover:not(:disabled) { background: var(--blue-hover); transform: none; }
 .send-button:disabled { background: #c7d2ea; color: #fff; }
+
+/* ---------- Message avatars & room search ---------- */
+.message-row { align-items: flex-end; gap: 10px; }
+.message-avatar { margin-bottom: 2px; }
+.room-search-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 20px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
+.room-search-bar input {
+  flex: 1 1 220px; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-soft); color: var(--ink); font-size: 14px;
+}
+.room-search-bar input:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(36, 87, 245, 0.12); }
+.room-search-hint { color: var(--muted); font-size: 12px; }
+.room-search-load {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  color: var(--blue); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.room-search-load:hover:not(:disabled) { background: var(--blue-soft); }
+.room-search-load:disabled { opacity: 0.6; }

@@ -9,6 +9,7 @@ import { ConversationSidebar } from "../components/chat/ConversationSidebar";
 import { ChatHeader } from "../components/chat/ChatHeader";
 import { MessageComposer } from "../components/chat/MessageComposer";
 import { MessageList, type MessageListHandle } from "../components/chat/MessageList";
+import { RoomSearchBar } from "../components/chat/RoomSearchBar";
 import { PinnedMessageBanner } from "../components/chat/PinnedMessageBanner";
 import { NewConversationDialog } from "../components/chat/NewConversationDialog";
 import { Toast } from "../components/Toast";
@@ -27,6 +28,7 @@ import {
   declineGroupInvitation,
   sendTextMessage,
 } from "../services/matrix/messaging";
+import { hasOlderHistory, loadOlderMessages } from "../services/matrix/history";
 import { loadMatrixMessage } from "../services/matrix/messageNavigation";
 import { canManagePinnedMessages, getPinnedEventIds, updatePinnedEvent } from "../services/matrix/pinning";
 import type { Conversation, Message, UserConnection } from "../types";
@@ -80,6 +82,9 @@ export function ChatPage() {
   const [joiningRoom, setJoiningRoom] = useState(false);
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const [startingContactId, setStartingContactId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
   const messageListRef = useRef<MessageListHandle>(null);
   const groupCreationPromise = useRef<Promise<void> | null>(null);
@@ -126,7 +131,11 @@ export function ChatPage() {
     ? conversations.find((conversation) => conversation.id === conversationId) ?? null
     : null;
   const selectedId = selectedConversation?.id;
-  useEffect(() => setReplyTo(null), [selectedId]);
+  useEffect(() => {
+    setReplyTo(null);
+    setSearchOpen(false);
+    setSearchTerm("");
+  }, [selectedId]);
 
   const selectedRoom = selectedId ? client?.getRoom(selectedId) : null;
   const ownMatrixUserId = client?.getUserId();
@@ -355,6 +364,23 @@ export function ChatPage() {
     [canSend, client, contacts.verifyAccepted, replyTo, selectedConversation],
   );
 
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchTerm("");
+  }, []);
+
+  const loadOlder = useCallback(async () => {
+    if (!client || !selectedRoom) return;
+    setLoadingOlder(true);
+    try {
+      await loadOlderMessages(client, selectedRoom);
+    } catch (cause) {
+      notify(errorMessage(cause, "Older messages could not be loaded."), "error");
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [client, notify, selectedRoom]);
+
   const toggleTag = useCallback(
     async (toggle: (roomId: string) => Promise<void>, label: string) => {
       if (!selectedConversation?.roomId) return;
@@ -418,8 +444,21 @@ export function ChatPage() {
             canTag={Boolean(selectedConversation?.roomId)}
             onToggleFavorite={() => void toggleTag(tags.toggleFavorite, "favorite")}
             onTogglePinned={() => void toggleTag(tags.togglePinned, "pin")}
+            searchOpen={searchOpen}
+            onToggleSearch={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
             onBack={() => navigate("/chat")}
           />
+
+          {searchOpen && selectedConversation && (
+            <RoomSearchBar
+              value={searchTerm}
+              onChange={setSearchTerm}
+              onClose={closeSearch}
+              canLoadOlder={Boolean(selectedRoom && hasOlderHistory(selectedRoom))}
+              loadingOlder={loadingOlder}
+              onLoadOlder={() => void loadOlder()}
+            />
+          )}
 
           <ConnectionBanner
             status={matrix.status}
@@ -479,10 +518,14 @@ export function ChatPage() {
             ref={messageListRef}
             conversation={selectedConversation}
             matrixSession={matrixSession}
-            searchTerm=""
-            searchOpen={false}
+            searchTerm={searchTerm}
+            searchOpen={searchOpen}
             conversationRouteId={conversationId}
             onReply={setReplyTo}
+            ownAvatar={{
+              name: user.profile.display_name || user.username,
+              avatarUrl: user.profile.profile_picture_url,
+            }}
             pinnedEventIds={pins.pinnedEventIdSet}
             canManagePins={canManagePins}
             onTogglePin={togglePinnedMessage}
