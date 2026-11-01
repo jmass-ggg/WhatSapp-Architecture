@@ -133,3 +133,91 @@ describe("MessageComposer reply preview", () => {
     expect(screen.getByText("Original message unavailable")).toBeTruthy();
   });
 });
+
+describe("MessageComposer mentions", () => {
+  const members = [
+    { userId: "@james:x", name: "James Gurung" },
+    { userId: "@james2:x", name: "James Gurung" },
+    { userId: "@alex:x", name: "Alex Smith" },
+    { userId: "@me:x", name: "Me" },
+  ];
+  const setupMentions = (onSend = vi.fn().mockResolvedValue(undefined)) => {
+    render(<MessageComposer onSend={onSend} mentionMembers={members} ownUserId="@me:x" />);
+    const input = screen.getByRole("textbox", { name: "Write a message" }) as HTMLTextAreaElement;
+    return { onSend, input };
+  };
+  const type = (input: HTMLTextAreaElement, value: string) => fireEvent.change(input, { target: { value } });
+
+  it("opens on @, filters by name/username, shows an empty state, and excludes yourself", () => {
+    const { input } = setupMentions();
+    type(input, "@");
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(screen.queryByRole("option", { name: /^Me,/ })).toBeNull();
+    type(input, "@ALEX");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    type(input, "@nobody");
+    expect(screen.getByText("No matching members")).toBeTruthy();
+    type(input, "mail a@b.com");
+    expect(screen.queryByText("Mention someone")).toBeNull();
+  });
+
+  it("navigates with arrows, Enter selects without sending, Escape closes, normal Enter still sends", async () => {
+    const { input, onSend } = setupMentions();
+    type(input, "Hi @j");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(screen.getAllByRole("option")[1].getAttribute("aria-selected")).toBe("true");
+    expect(input.getAttribute("aria-activedescendant")).toBe(screen.getAllByRole("option")[1].id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("Hi @James Gurung ");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    expect(onSend).toHaveBeenCalledWith("Hi @James Gurung", undefined, [{ userId: "@james2:x", label: "@James Gurung", start: 3, end: 16 }]);
+    expect(input.value).toBe("");
+    type(input, "@a");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("selects by mouse, supports several mentions, and drops a mention whose text is edited", async () => {
+    const { input, onSend } = setupMentions();
+    type(input, "@ale");
+    fireEvent.click(screen.getByRole("option", { name: /Alex Smith/ }));
+    type(input, `${input.value}and @jam`);
+    fireEvent.click(screen.getAllByRole("option")[0]);
+    expect(document.activeElement).toBe(input);
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+    const mentions = onSend.mock.calls[0][2];
+    expect(mentions.map((m: { userId: string }) => m.userId)).toEqual(["@alex:x", "@james:x"]);
+    type(input, "@ale");
+    fireEvent.click(screen.getByRole("option", { name: /Alex/ }));
+    type(input, "@Alx Smith ");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+    expect(onSend.mock.calls[1][2]).toBeUndefined();
+  });
+
+  it("keeps plain @text unmentioned, shifts offsets when pasting before a mention, and keeps state after a failed send", async () => {
+    const onSend = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const { input } = setupMentions(onSend);
+    type(input, "@Alex Smith plain");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+    expect(onSend.mock.calls[0][2]).toBeUndefined(); // typed, never selected
+    type(input, "@ale");
+    fireEvent.click(screen.getByRole("option", { name: /Alex/ }));
+    type(input, `PASTE ${input.value}`);
+    await act(async () => { fireEvent.submit(input.closest("form")!); }); // fails
+    expect(input.value).toBe("PASTE @Alex Smith ");
+    await act(async () => { fireEvent.submit(input.closest("form")!); }); // retry succeeds
+    expect(onSend.mock.calls[2][2]).toEqual([{ userId: "@alex:x", label: "@Alex Smith", start: 6, end: 17 }]);
+    expect(input.value).toBe("");
+  });
+
+  it("only suggests the supplied room's members after the room changes", () => {
+    const { rerender } = render(<MessageComposer onSend={vi.fn()} mentionMembers={members} ownUserId="@me:x" />);
+    rerender(<MessageComposer onSend={vi.fn()} mentionMembers={[{ userId: "@zed:y", name: "Zed" }]} ownUserId="@me:x" />);
+    const input = screen.getByRole("textbox", { name: "Write a message" }) as HTMLTextAreaElement;
+    type(input, "@");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /Zed/ })).toBeTruthy();
+  });
+});

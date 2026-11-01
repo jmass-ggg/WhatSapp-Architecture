@@ -205,3 +205,24 @@ it("shows the sender avatar beside incoming and the user's avatar beside outgoin
   );
   expect(view.container.querySelector(".message-avatar")?.textContent).toContain("MC");
 });
+
+describe("mentions in bubbles", () => {
+  const conversation = { id: "!room:localhost", isGroup: true } as Conversation;
+  const base = { id: "$m", sender: "them", senderName: "Alex", text: "Hi @James, ok?", delivery: "sent", sentAt: new Date(1_750_000_000_000),
+    segments: [{ text: "Hi " }, { text: "@James", userId: "@james:x" }, { text: ", ok?" }] } as Message;
+
+  it("renders confirmed mentions as buttons that resolve by Matrix ID, with plain text untouched", () => {
+    const onMentionClick = vi.fn();
+    const { container } = render(<MessageBubble message={{ ...base, mentionsMe: true }} conversation={conversation} matrixSession={null} onMentionClick={onMentionClick} />);
+    fireEvent.click(screen.getByRole("button", { name: "@James" }));
+    expect(onMentionClick).toHaveBeenCalledWith("@james:x");
+    expect(container.querySelector(".message-text")?.textContent).toBe("Hi @James, ok?");
+    expect(container.querySelector(".message-text.mentions-me")).toBeTruthy();
+  });
+
+  it("does not treat unconfirmed @text as a mention", () => {
+    render(<MessageBubble message={{ ...base, segments: undefined }} conversation={conversation} matrixSession={null} />);
+    expect(screen.queryByRole("button", { name: "@James" })).toBeNull();
+    expect(screen.getByText("Hi @James, ok?")).toBeTruthy();
+  });
+});

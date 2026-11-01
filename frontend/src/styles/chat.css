@@ -2351,3 +2351,75 @@
 @media (pointer: coarse) {
   .composer-reply-cancel { flex-basis: 44px; width: 44px; height: 44px; margin: -10px -4px -10px 0; }
 }
+
+/* @mentions */
+.composer-mention-anchor { position: relative; }
+
+.mention-suggestions {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 6px);
+  left: 0;
+  box-sizing: border-box;
+  width: min(100%, 380px);
+  max-height: min(280px, 45vh);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+}
+
+.mention-suggestions ul { margin: 0; padding: 4px; list-style: none; }
+.mention-heading { margin: 0; padding: 9px 12px 6px; color: var(--muted); font-size: 12px; font-weight: 650; border-bottom: 1px solid var(--line); }
+.mention-empty { margin: 0; padding: 12px; color: var(--muted); font-size: 13px; }
+
+.mention-option {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mention-option.is-active { background: rgba(36, 87, 245, 0.1); }
+
+.mention-avatar {
+  display: inline-flex;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--blue-deep);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mention-names { display: flex; min-width: 0; flex-direction: column; }
+.mention-name { overflow: hidden; color: var(--ink); font-size: 13.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.mention-username { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.mention-names mark { background: transparent; color: var(--blue); font-weight: 700; }
+
+.mention {
+  display: inline;
+  margin: 0;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(36, 87, 245, 0.12);
+  color: var(--blue-deep);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mention:hover { background: rgba(36, 87, 245, 0.22); }
+.mention:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.mentions-me .mention { background: rgba(36, 87, 245, 0.24); }
+
+.info-members li.is-mentioned { border-radius: 8px; background: rgba(36, 87, 245, 0.1); }

@@ -25,6 +25,7 @@ interface ConversationInfoPanelProps {
   shared: SharedContent;
   starred: StarredEntry[];
   members: RoomMemberInfo[];
+  highlightedMemberId?: string | null;
   topic?: string;
   isFavorite: boolean;
   canTag: boolean;
@@ -98,7 +99,7 @@ function FileRow({ item, token, onError }: { item: SharedAttachment; token?: str
 }
 
 export function ConversationInfoPanel({
-  conversation, matrixSession, shared, starred, members, topic, isFavorite, canTag,
+  conversation, matrixSession, shared, starred, members, highlightedMemberId, topic, isFavorite, canTag,
   canLoadOlder, loadingOlder, onLoadOlder, onToggleFavorite, onSearch, onOpenMessage, onNotify, onClose,
 }: ConversationInfoPanelProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -206,7 +207,7 @@ export function ConversationInfoPanel({
             <h3 id="info-members">Members <span className="info-count">{members.length}</span></h3>
             <ul className="info-members">
               {members.map((member) => (
-                <li key={member.userId}>
+                <li key={member.userId} className={member.userId === highlightedMemberId ? "is-mentioned" : undefined} ref={member.userId === highlightedMemberId ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}>
                   <UserAvatar
                     name={member.name}
                     initials={initialsOf(member.name)}

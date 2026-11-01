@@ -36,6 +36,7 @@ function mockClient({
     hasEncryptionStateEvent: () => encrypted,
     findEventById: () => (knowsReplyTarget ? {} : undefined),
     getMyMembership: membership,
+    getMember: (id: string) => (id === "@gone:localhost" ? { membership: "leave" } : { membership: "join" }),
     currentState: {
       maySendEvent: vi.fn(() => canSend),
       getStateEvents: () => null,
@@ -113,6 +114,32 @@ describe("sendTextMessage", () => {
       body: "re",
       "m.relates_to": { "m.in_reply_to": { event_id: "$orig:localhost" } },
     });
+  });
+
+  it("sends real mentions with escaped HTML, deduped ids, no self-notification and the reply relation", async () => {
+    const { client, sendMessage } = mockClient();
+    const text = "Hi @James <b>&</b> @James\n@Me @Gone";
+    const at = (label: string, nth = 0) => { let i = -1; for (let n = 0; n <= nth; n++) i = text.indexOf(label, i + 1); return { start: i, end: i + label.length, label }; };
+    await sendTextMessage(client, roomId, `  ${text}  `, "$orig:localhost", [
+      { userId: "@james:localhost", ...{ start: at("@James").start + 2, end: at("@James").end + 2, label: "@James" } },
+      { userId: "@james:localhost", ...{ start: at("@James", 1).start + 2, end: at("@James", 1).end + 2, label: "@James" } },
+      { userId: "@sender:localhost", ...{ start: at("@Me").start + 2, end: at("@Me").end + 2, label: "@Me" } },
+      { userId: "@gone:localhost", ...{ start: at("@Gone").start + 2, end: at("@Gone").end + 2, label: "@Gone" } },
+    ]);
+    const content = (sendMessage.mock.calls as unknown as [string, Record<string, unknown>][])[0][1];
+    expect(content.body).toBe(text);
+    expect(content["m.mentions"]).toEqual({ user_ids: ["@james:localhost"] });
+    expect(content.format).toBe("org.matrix.custom.html");
+    expect(content.formatted_body).toBe(
+      'Hi <a href="https://matrix.to/#/@james:localhost">@James</a> &lt;b&gt;&amp;&lt;/b&gt; <a href="https://matrix.to/#/@james:localhost">@James</a><br><a href="https://matrix.to/#/@sender:localhost">@Me</a> @Gone',
+    );
+    expect(content["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$orig:localhost" } });
+  });
+
+  it("treats a stale or edited mention as plain text", async () => {
+    const { client, sendMessage } = mockClient();
+    await sendTextMessage(client, roomId, "hello @Jam", undefined, [{ userId: "@james:localhost", label: "@James", start: 6, end: 12 }]);
+    expect(sendMessage).toHaveBeenCalledWith(roomId, { msgtype: "m.text", body: "hello @Jam" });
   });
 
   it("refuses empty messages, unknown reply targets, missing permission and unjoined rooms", async () => {

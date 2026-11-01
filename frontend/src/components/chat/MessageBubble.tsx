@@ -17,6 +17,7 @@ interface MessageBubbleProps {
   matrixSession: MatrixSession | null;
   ownAvatar?: { name: string; avatarUrl?: string | null };
   onReply?: (message: Message) => void;
+  onMentionClick?: (userId: string) => void;
   onJump?: (eventId: string) => void;
   isPinned?: boolean;
   canManagePins?: boolean;
@@ -63,6 +64,7 @@ export function MessageBubble({
   matrixSession,
   ownAvatar,
   onReply,
+  onMentionClick,
   onJump,
   isPinned = false,
   canManagePins = false,
@@ -198,7 +200,15 @@ export function MessageBubble({
               matrixToken={matrixSession?.access_token}
             />
           )}
-          {message.text && <p className="message-text">{message.text}</p>}
+          {message.text && (
+            <p className={`message-text${message.mentionsMe ? " mentions-me" : ""}`}>
+              {message.segments
+                ? message.segments.map((segment, index) => segment.userId
+                  ? <button key={index} type="button" className="mention" data-user-id={segment.userId} onClick={() => onMentionClick?.(segment.userId!)}>{segment.text}</button>
+                  : <span key={index}>{segment.text}</span>)
+                : message.text}
+            </p>
+          )}
           <span className="message-meta">
             {isStarred && (
               <span className="message-pin-indicator" title="Starred message">

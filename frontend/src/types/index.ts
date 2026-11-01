@@ -86,6 +86,10 @@ export interface Message {
   sender: "me" | "them";
   senderName?: string;
   text: string;
+  /** Mention-aware rendering of `text`; present only when the event carries confirmed mentions. */
+  segments?: { text: string; userId?: string }[];
+  /** True when the event's m.mentions lists the current user. */
+  mentionsMe?: boolean;
   sentAt?: Date;
   delivery: "sending" | "sent" | "read" | "failed" | "cancelled";
   readAt?: Date;

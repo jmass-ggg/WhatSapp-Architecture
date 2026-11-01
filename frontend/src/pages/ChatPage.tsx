@@ -33,6 +33,7 @@ import {
   sendTextMessage,
 } from "../services/matrix/messaging";
 import { roomMembers, roomTopic } from "../services/matrix/members";
+import type { MentionEntity } from "../services/matrix/mentions";
 import { extractSharedContent } from "../services/matrix/sharedContent";
 import { hasOlderHistory, loadOlderMessages } from "../services/matrix/history";
 import { loadMatrixMessage } from "../services/matrix/messageNavigation";
@@ -102,6 +103,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const [startingContactId, setStartingContactId] = useState<string | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [highlightedMember, setHighlightedMember] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -211,6 +213,21 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [selectedRoom, selectedConversation?.isGroup, selectedConversation?.messages, matrix.rooms],
   );
+  // Mention candidates are always the active room's joined members (groups and direct rooms alike).
+  const mentionMembers = useMemo(
+    () => (selectedRoom ? roomMembers(selectedRoom) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedRoom, selectedConversation?.messages, matrix.rooms],
+  );
+  const openMention = useCallback((userId: string) => {
+    // Resolve by Matrix ID within this room only; never by display name.
+    if (!mentionMembers.some((m) => m.userId === userId)) {
+      notify("That person is no longer in this conversation.", "error");
+      return;
+    }
+    setHighlightedMember(userId);
+    setInfoOpen(true);
+  }, [mentionMembers, notify]);
   const canManagePins = canManagePinnedMessages(selectedRoom, ownMatrixUserId);
   useEffect(() => setActivePinnedIndex(0), [selectedId]);
 
@@ -404,19 +421,19 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
   }, [canSend, client, contacts.verifyAccepted, replyTo, selectedConversation]);
 
   const sendMessage = useCallback(
-    async (text: string, file?: File) => {
+    async (text: string, file?: File, mentions?: MentionEntity[]) => {
       const { client, roomId, replyEventId } = await prepareSend();
       if (file) {
         try {
           assertSendReady(client, roomId, replyEventId);
           await sendAttachment(client, roomId, file, replyEventId, setAttachmentProgress);
-          if (text.trim()) await sendTextMessage(client, roomId, text);
+          if (text.trim()) await sendTextMessage(client, roomId, text, undefined, mentions);
         } catch (error) {
           setAttachmentProgress("Failed");
           throw error;
         }
       } else {
-        await sendTextMessage(client, roomId, text, replyEventId);
+        await sendTextMessage(client, roomId, text, replyEventId, mentions);
       }
       setReplyTo(null);
     },
@@ -637,6 +654,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
             searchOpen={searchOpen}
             conversationRouteId={conversationId}
             onReply={setReplyTo}
+            onMentionClick={openMention}
             starredEventIds={starredEventIds}
             onToggleStar={(eventId) => void toggleStar(eventId)}
             ownAvatar={{
@@ -669,6 +687,8 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
               placeholder={canSend ? "Write a message…" : "Messaging is unavailable"}
               hint={composerHint}
               onSend={sendMessage}
+              mentionMembers={mentionMembers}
+              ownUserId={ownMatrixUserId ?? undefined}
               onSendVoice={sendVoice}
             />
           )}
@@ -681,6 +701,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
             shared={shared}
             starred={starredInRoom}
             members={members}
+            highlightedMemberId={highlightedMember}
             topic={selectedRoom && selectedConversation.isGroup ? roomTopic(selectedRoom) : undefined}
             isFavorite={Boolean(selectedId && tags.favorites.has(selectedId))}
             canTag={Boolean(selectedConversation.roomId)}

@@ -22,6 +22,7 @@ interface MessageListProps {
   searchOpen: boolean;
   conversationRouteId?: string;
   onReply?: (message: Message) => void;
+  onMentionClick?: (userId: string) => void;
   pinnedEventIds?: ReadonlySet<string>;
   canManagePins?: boolean;
   onTogglePin?: (eventId: string) => void;
@@ -82,6 +83,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   searchOpen,
   conversationRouteId,
   onReply,
+  onMentionClick,
   pinnedEventIds = EMPTY_PINNED_IDS,
   canManagePins = false,
   onTogglePin,
@@ -239,6 +241,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 isStarred={Boolean(message.matrix?.eventId && starredEventIds?.has(message.matrix.eventId))}
                 onToggleStar={onToggleStar}
                 onReply={onReply}
+                onMentionClick={onMentionClick}
                 isPinned={Boolean(message.matrix?.eventId && pinnedEventIds.has(message.matrix.eventId))}
                 canManagePins={canManagePins}
                 canPinNewMessage={pinnedEventIds.size < 3}

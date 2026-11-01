@@ -24,6 +24,8 @@ import type { MatrixClient } from "matrix-js-sdk";
 import type { Message } from "../../types";
 import { validateAttachment, type VoiceRecording, type VoiceSendAttempt } from "../../services/matrix/attachments";
 import { VoiceRecorder } from "./VoiceRecorder";
+import { MENTION_LISTBOX_ID, MentionSuggestions, mentionOptionId } from "./MentionSuggestions";
+import { adjustMentions, filterMentionCandidates, findMentionTrigger, type MentionCandidate, type MentionEntity } from "../../services/matrix/mentions";
 
 const EmojiPicker = lazy(() =>
   import("./EmojiPicker").then((module) => ({ default: module.EmojiPicker })),
@@ -52,7 +54,10 @@ interface MessageComposerProps {
   busy?: boolean;
   placeholder?: string;
   hint?: string;
-  onSend: (text: string, file?: File) => Promise<void>;
+  onSend: (text: string, file?: File, mentions?: MentionEntity[]) => Promise<void>;
+  /** Members of the active conversation that may be mentioned. */
+  mentionMembers?: MentionCandidate[];
+  ownUserId?: string;
   /** Enables the microphone button; must resolve only after the message was acknowledged. */
   onSendVoice?: (recording: VoiceRecording, attempt: VoiceSendAttempt) => Promise<void>;
   typingClient?: MatrixClient | null;
@@ -70,6 +75,8 @@ export function MessageComposer({
   placeholder = "Write a message…",
   hint = "Enter to send · Shift + Enter for a new line",
   onSend,
+  mentionMembers = [],
+  ownUserId,
   onSendVoice,
   typingClient,
   typingRoomId,
@@ -79,6 +86,10 @@ export function MessageComposer({
   uploadStatus,
 }: MessageComposerProps) {
   const [value, setValue] = useState("");
+  const [mentions, setMentions] = useState<MentionEntity[]>([]);
+  const [caret, setCaret] = useState(0);
+  const [dismissedStart, setDismissedStart] = useState<number | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [file, setFile] = useState<File | undefined>();
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -94,6 +105,13 @@ export function MessageComposer({
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const typingActive = useRef(false);
   const typingTarget = useRef<{ client: MatrixClient; roomId: string } | null>(null);
+  const rawTrigger = findMentionTrigger(value, caret);
+  const insideMention = rawTrigger ? mentions.some((m) => rawTrigger.start >= m.start && rawTrigger.start < m.end) : false;
+  const trigger = rawTrigger && !insideMention && rawTrigger.start !== dismissedStart && !disabled && !isBusy && mentionMembers.length > 0 ? rawTrigger : null;
+  const candidates = trigger ? filterMentionCandidates(mentionMembers, trigger.query, ownUserId) : [];
+  // A multi-word query with no match is ordinary prose, not a search.
+  const suggestionsOpen = Boolean(trigger) && (candidates.length > 0 || !/\s/.test(trigger!.query));
+  const safeIndex = Math.min(activeIndex, Math.max(0, candidates.length - 1));
   const closeEmojiPicker = useCallback(() => setEmojiOpen(false), []);
 
   useLayoutEffect(() => {
@@ -151,6 +169,8 @@ export function MessageComposer({
 
   async function submit() {
     const text = value.trim();
+    const lead = value.length - value.trimStart().length;
+    const sendMentions = mentions.map((m) => ({ ...m, start: m.start - lead, end: m.end - lead })).filter((m) => m.start >= 0 && m.end <= text.length);
     if (
       (!text && !file) ||
       disabled ||
@@ -160,9 +180,12 @@ export function MessageComposer({
     setError("");
     setSending(true);
     try {
-      await onSend(text, file);
+      if (sendMentions.length) await onSend(text, file, sendMentions);
+      else await onSend(text, file);
       stopTyping();
       setValue("");
+      setMentions([]);
+      setDismissedStart(null);
       setFile(undefined);
       if (fileRef.current) fileRef.current.value = "";
       if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -182,7 +205,49 @@ export function MessageComposer({
     void submit();
   }
 
+  function selectMention(member: MentionCandidate) {
+    if (!trigger) return;
+    const label = `@${member.name}`;
+    const next = `${value.slice(0, trigger.start)}${label} ${value.slice(caret)}`;
+    const kept = adjustMentions(mentions, value, next).filter((m) => m.end <= trigger.start || m.start >= trigger.start + label.length + 1);
+    const entity: MentionEntity = { userId: member.userId, label, start: trigger.start, end: trigger.start + label.length };
+    const position = trigger.start + label.length + 1;
+    pendingEmojiSelection.current = position;
+    setMentions([...kept, entity].sort((a, b) => a.start - b.start));
+    setValue(next);
+    setCaret(position);
+    setActiveIndex(0);
+    updateTyping(next);
+    textareaRef.current?.focus();
+  }
+
+  useEffect(() => {
+    if (!suggestionsOpen) return;
+    const close = (event: MouseEvent) => {
+      if (event.target instanceof Node && (textareaRef.current?.contains(event.target) || (event.target as HTMLElement).closest?.(".mention-suggestions"))) return;
+      setDismissedStart(trigger?.start ?? null);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [suggestionsOpen, trigger?.start]);
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (suggestionsOpen) {
+      if (event.key === "Escape") { event.preventDefault(); setDismissedStart(trigger!.start); return; }
+      if (candidates.length > 0) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const step = event.key === "ArrowDown" ? 1 : -1;
+          setActiveIndex((safeIndex + step + candidates.length) % candidates.length);
+          return;
+        }
+        if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+          event.preventDefault();
+          selectMention(candidates[safeIndex]);
+          return;
+        }
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
@@ -232,6 +297,10 @@ export function MessageComposer({
       {voiceOpen && onSendVoice ? (
         <VoiceRecorder onSend={onSendVoice} onClose={() => setVoiceOpen(false)} status={uploadStatus} />
       ) : (<>
+      <div className="composer-mention-anchor">
+      {suggestionsOpen && trigger && (
+        <MentionSuggestions members={candidates} query={trigger.query} activeIndex={safeIndex} onSelect={selectMention} onHover={setActiveIndex} />
+      )}
       <form className="message-composer" onSubmit={handleSubmit}>
         <div className="composer-tools">
           <div className="emoji-anchor" ref={emojiAnchorRef}>
@@ -299,12 +368,22 @@ export function MessageComposer({
           ref={textareaRef}
           value={value}
           onChange={(event) => {
+            setMentions((current) => adjustMentions(current, value, event.target.value));
+            setCaret(event.target.selectionStart ?? event.target.value.length);
+            setActiveIndex(0);
             setValue(event.target.value);
             updateTyping(event.target.value);
             event.currentTarget.style.height = "auto";
             event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 132)}px`;
           }}
           onKeyDown={handleKeyDown}
+          onKeyUp={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+          onClick={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+          role={suggestionsOpen ? "combobox" : undefined}
+          aria-autocomplete={suggestionsOpen ? "list" : undefined}
+          aria-expanded={suggestionsOpen ? true : undefined}
+          aria-controls={suggestionsOpen && candidates.length ? MENTION_LISTBOX_ID : undefined}
+          aria-activedescendant={suggestionsOpen && candidates.length ? mentionOptionId(candidates[safeIndex].userId) : undefined}
           placeholder={placeholder}
           rows={1}
           aria-label="Write a message"
@@ -320,6 +399,7 @@ export function MessageComposer({
           <SendHorizontal size={19} />
         </button>
       </form>
+      </div>
       <span className="composer-hint">{hint}</span>
       </>)}
     </div>

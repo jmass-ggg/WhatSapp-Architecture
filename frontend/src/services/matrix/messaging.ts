@@ -1,6 +1,7 @@
 import type { MatrixClient } from "matrix-js-sdk";
 import { EventType, MsgType, Preset, Visibility } from "matrix-js-sdk";
 import type { ISendEventResponse } from "matrix-js-sdk";
+import { buildMentionContent, type MentionEntity } from "./mentions";
 
 export const MATRIX_GROUP_MARKER_TYPE = "org.recruitable.chat.group";
 export const MATRIX_DIRECT_MARKER_TYPE = "org.recruitable.chat.direct";
@@ -129,13 +130,23 @@ export async function sendTextMessage(
   roomId: string,
   text: string,
   replyEventId?: string,
+  mentions: MentionEntity[] = [],
 ): Promise<ISendEventResponse> {
   const body = text.trim();
   if (!body) throw new Error("Message is empty.");
   assertSendReady(client, roomId, replyEventId);
+  const offset = text.length - text.trimStart().length;
+  const room = client.getRoom(roomId);
+  // Only members currently joined to this room can be mentioned; anything else stays plain text.
+  const content = buildMentionContent(
+    body,
+    mentions.map((m) => ({ ...m, start: m.start - offset, end: m.end - offset })),
+    (userId) => room?.getMember?.(userId)?.membership === "join",
+    client.getUserId() ?? undefined,
+  );
   return client.sendMessage(roomId, {
     msgtype: MsgType.Text,
-    body,
+    ...content,
     ...(replyEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyEventId } } } : {}),
   });
 }

@@ -1,6 +1,7 @@
 import { EventStatus, type MatrixEvent } from "matrix-js-sdk";
 
 import type { Message } from "../../types";
+import { parseMentionSegments } from "./mentions";
 
 const FILE_MESSAGE_TYPES = new Set([
   "m.image",
@@ -76,11 +77,15 @@ export function messageFromMatrixEvent(
   const relation = content["m.relates_to"] as { "m.in_reply_to"?: { event_id?: unknown } } | undefined;
   const replyEventId = relation?.["m.in_reply_to"]?.event_id;
 
+  const mentionIds = (content["m.mentions"] as { user_ids?: unknown } | undefined)?.user_ids;
+  const segments = isFile ? undefined : parseMentionSegments(content);
   return {
     id: eventId ?? `local-${senderId}-${event.getTs()}-${body}`,
     sender: senderId === ownUserId ? "me" : "them",
     senderName: undefined,
     text: isFile ? "" : body,
+    ...(segments ? { segments } : {}),
+    ...(Array.isArray(mentionIds) && mentionIds.includes(ownUserId) ? { mentionsMe: true } : {}),
     sentAt,
     delivery: senderId === ownUserId ? outgoingDelivery(event) : "sent",
     ...(typeof replyEventId === "string" ? { replyTo: { eventId: replyEventId, sender: "", text: "Original message unavailable" } } : {}),
