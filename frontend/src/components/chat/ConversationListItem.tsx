@@ -1,4 +1,4 @@
-import { CheckCheck, Check, Clock3, UsersRound } from "lucide-react";
+import { CheckCheck, Check, Clock3, Pin, Star, UsersRound } from "lucide-react";
 
 import { UserAvatar } from "../UserAvatar";
 import type { Conversation } from "../../types";
@@ -7,17 +7,17 @@ interface ConversationListItemProps {
   conversation: Conversation;
   selected: boolean;
   matrixToken?: string | null;
+  isFavorite?: boolean;
+  isPinned?: boolean;
   onSelect: () => void;
 }
 
-function formatActivity(date: Date): string {
+export function formatActivity(date: Date, now: Date = new Date()): string {
   if (date.getTime() < 1) return "";
-  const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60_000));
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  if (hours < 48) return "yesterday";
+  const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
+  if (days <= 0) return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+  if (days === 1) return "Yesterday";
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
@@ -25,6 +25,8 @@ export function ConversationListItem({
   conversation,
   selected,
   matrixToken,
+  isFavorite = false,
+  isPinned = false,
   onSelect,
 }: ConversationListItemProps) {
   const lastMessage = conversation.isTyping
@@ -89,7 +91,14 @@ export function ConversationListItem({
               {conversation.unreadCount > 99 ? "99+" : conversation.unreadCount}
             </span>
           )}
+          {conversation.unreadCount === 0 && isPinned && (
+            <Pin size={15} className="conversation-flag" aria-label="Pinned" />
+          )}
+          {conversation.unreadCount === 0 && !isPinned && isFavorite && (
+            <Star size={15} className="conversation-flag is-favorite" fill="currentColor" aria-label="Favorite" />
+          )}
           {conversation.unreadCount === 0 &&
+            !isPinned && !isFavorite &&
             !conversation.isGroup &&
             conversation.lastMessage.startsWith("You:") && (
             <Check size={13} className="preview-check" aria-label="Sent" />

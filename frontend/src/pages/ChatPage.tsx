@@ -17,6 +17,7 @@ import { useMatrixContext } from "../context/MatrixContext";
 import { useConnections } from "../hooks/useConnections";
 import { useMatrixRooms } from "../hooks/useMatrixRooms";
 import { usePinnedMessages } from "../hooks/usePinnedMessages";
+import { useRoomTags } from "../hooks/useRoomTags";
 import { useReadReceipts } from "../hooks/useReadReceipts";
 import { sendAttachment } from "../services/matrix/attachments";
 import { matrixUserIdForAppUserId } from "../services/matrix/identity";
@@ -68,6 +69,7 @@ export function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const matrix = useMatrixRooms();
   const { client, presence } = useMatrixContext();
+  const tags = useRoomTags(client, matrix.rooms);
   const contacts = useConnections(api, mode === "live" ? user?.id : undefined);
 
   const [dialog, setDialog] = useState<null | "chat" | "group">(null);
@@ -353,6 +355,18 @@ export function ChatPage() {
     [canSend, client, contacts.verifyAccepted, replyTo, selectedConversation],
   );
 
+  const toggleTag = useCallback(
+    async (toggle: (roomId: string) => Promise<void>, label: string) => {
+      if (!selectedConversation?.roomId) return;
+      try {
+        await toggle(selectedConversation.roomId);
+      } catch (cause) {
+        notify(errorMessage(cause, `Could not update ${label}.`), "error");
+      }
+    },
+    [notify, selectedConversation?.roomId],
+  );
+
   const handleSignOut = useCallback(() => {
     void signOut().catch(() => undefined).finally(() => navigate("/login", { replace: true }));
   }, [navigate, signOut]);
@@ -375,12 +389,14 @@ export function ChatPage() {
           matrixSession={matrixSession}
           presence={ownMatrixUserId ? presence[ownMatrixUserId] : undefined}
           onNavigate={(section) => section === "chats" && navigate("/chat")}
+          onSignOut={handleSignOut}
         />
         <ConversationSidebar
           conversations={conversations}
           selectedId={selectedId}
-          currentUser={user}
           matrixSession={matrixSession}
+          favoriteIds={tags.favorites}
+          pinnedIds={tags.pinned}
           loading={!matrix.initialSyncComplete && matrix.status !== "error"}
           incomingRequests={contacts.incomingRequests}
           requestsLoading={contacts.loading}
@@ -391,11 +407,19 @@ export function ChatPage() {
           onDeclineRequest={(request) => void respondToRequest(request, "decline")}
           onNewChat={() => setDialog("chat")}
           onNewGroup={() => setDialog("group")}
-          onSignOut={handleSignOut}
         />
 
         <section className="chat-main" aria-label="Chat">
-          <ChatHeader conversation={selectedConversation} matrixSession={matrixSession} onBack={() => navigate("/chat")} />
+          <ChatHeader
+            conversation={selectedConversation}
+            matrixSession={matrixSession}
+            isFavorite={Boolean(selectedId && tags.favorites.has(selectedId))}
+            isPinned={Boolean(selectedId && tags.pinned.has(selectedId))}
+            canTag={Boolean(selectedConversation?.roomId)}
+            onToggleFavorite={() => void toggleTag(tags.toggleFavorite, "favorite")}
+            onTogglePinned={() => void toggleTag(tags.togglePinned, "pin")}
+            onBack={() => navigate("/chat")}
+          />
 
           <ConnectionBanner
             status={matrix.status}

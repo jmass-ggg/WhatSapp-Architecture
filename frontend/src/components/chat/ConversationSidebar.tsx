@@ -1,16 +1,22 @@
-import { LogOut, MessageSquarePlus, UsersRound } from "lucide-react";
+import { ChevronDown, Plus, Star, UsersRound } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { SearchInput } from "../SearchInput";
 import { UserAvatar } from "../UserAvatar";
 import { ConversationListItem } from "./ConversationListItem";
-import type { Conversation, MatrixSession, UserConnection, UserProfile } from "../../types";
+import {
+  countUnreadConversations,
+  groupConversations,
+  type ChatFilter,
+} from "../../services/conversationFilters";
+import type { Conversation, MatrixSession, UserConnection } from "../../types";
 
 interface ConversationSidebarProps {
   conversations: Conversation[];
   selectedId?: string;
-  currentUser: UserProfile;
   matrixSession: MatrixSession | null;
+  favoriteIds?: ReadonlySet<string>;
+  pinnedIds?: ReadonlySet<string>;
   incomingRequests: UserConnection[];
   requestsLoading: boolean;
   requestError: string | null;
@@ -21,8 +27,9 @@ interface ConversationSidebarProps {
   onDeclineRequest: (request: UserConnection) => void;
   onNewChat: () => void;
   onNewGroup: () => void;
-  onSignOut: () => void;
 }
+
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 function initialsFor(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
@@ -31,8 +38,9 @@ function initialsFor(name: string): string {
 export function ConversationSidebar({
   conversations,
   selectedId,
-  currentUser,
   matrixSession,
+  favoriteIds = EMPTY_SET,
+  pinnedIds = EMPTY_SET,
   incomingRequests,
   requestsLoading,
   requestError,
@@ -43,83 +51,105 @@ export function ConversationSidebar({
   onDeclineRequest,
   onNewChat,
   onNewGroup,
-  onSignOut,
 }: ConversationSidebarProps) {
   const [query, setQuery] = useState("");
-  const filtered = useMemo(() => {
-    const value = query.trim().toLowerCase();
-    if (!value) return conversations;
-    return conversations.filter(
-      (conversation) =>
-        conversation.name.toLowerCase().includes(value) ||
-        conversation.username?.toLowerCase().includes(value) ||
-        conversation.lastMessage.toLowerCase().includes(value),
-    );
-  }, [conversations, query]);
-  const direct = filtered.filter((conversation) => !conversation.isGroup);
-  const groups = filtered.filter((conversation) => conversation.isGroup);
-  const displayName = currentUser.profile.display_name || currentUser.username;
-
-  const renderList = (label: string, items: Conversation[]) => (
-    <section className="conversation-section" aria-label={label}>
-      <h2 className="sidebar-list-heading">{label}</h2>
-      {items.length === 0 ? (
-        <p className="sidebar-empty">{query ? "No matches." : `No ${label.toLowerCase()} yet.`}</p>
-      ) : (
-        <div className="conversation-list" role="list">
-          {items.map((conversation) => (
-            <div className="conversation-list-item" role="listitem" key={conversation.id}>
-              <ConversationListItem
-                conversation={conversation}
-                selected={selectedId === conversation.id}
-                matrixToken={matrixSession?.access_token}
-                onSelect={() => onSelect(conversation)}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
+  const [filter, setFilter] = useState<ChatFilter>("all");
+  const [collapsed, setCollapsed] = useState({ pinned: false, recent: false });
+  const unreadConversations = useMemo(() => countUnreadConversations(conversations), [conversations]);
+  const { pinned, recent } = useMemo(
+    () => groupConversations(conversations, { filter, query, favoriteIds, pinnedIds }),
+    [conversations, favoriteIds, filter, pinnedIds, query],
   );
+
+  const renderList = (key: "pinned" | "recent", label: string, items: Conversation[]) => {
+    const isCollapsed = collapsed[key];
+    return (
+      <section className="conversation-section" aria-label={label}>
+        <button
+          type="button"
+          className="sidebar-section-toggle"
+          aria-expanded={!isCollapsed}
+          onClick={() => setCollapsed((value) => ({ ...value, [key]: !value[key] }))}
+        >
+          <ChevronDown size={16} aria-hidden="true" className={isCollapsed ? "is-collapsed" : undefined} />
+          {label}
+        </button>
+        {!isCollapsed && items.map((conversation) => (
+          <div className="conversation-list-item" key={conversation.id}>
+            <ConversationListItem
+              conversation={conversation}
+              selected={selectedId === conversation.id}
+              matrixToken={matrixSession?.access_token}
+              isFavorite={favoriteIds.has(conversation.id)}
+              isPinned={pinnedIds.has(conversation.id)}
+              onSelect={() => onSelect(conversation)}
+            />
+          </div>
+        ))}
+      </section>
+    );
+  };
+
+  const filters: { id: ChatFilter; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "unread", label: "Unread" },
+    { id: "favorites", label: "Favorites" },
+    { id: "groups", label: "Groups" },
+  ];
+  const nothingVisible = pinned.length === 0 && recent.length === 0;
+  const emptyText = query
+    ? "No matches."
+    : filter === "unread"
+      ? "No unread conversations."
+      : filter === "favorites"
+        ? "No favorite conversations yet."
+        : filter === "groups"
+          ? "No groups yet."
+          : "No conversations yet.";
 
   return (
     <aside className="conversation-sidebar" aria-label="Conversations">
       <header className="sidebar-header">
         <h1 className="sidebar-title">Chats</h1>
         <div className="sidebar-actions">
-          <button type="button" className="sidebar-icon-button" onClick={onNewChat} aria-label="New chat" title="New chat">
-            <MessageSquarePlus size={18} />
-          </button>
           <button type="button" className="sidebar-icon-button" onClick={onNewGroup} aria-label="Create group" title="Create group">
             <UsersRound size={18} />
           </button>
+          <button type="button" className="new-chat-button" onClick={onNewChat} aria-label="New chat">
+            <Plus size={18} aria-hidden="true" />
+            New chat
+          </button>
         </div>
       </header>
-
-      <div className="sidebar-account">
-        <UserAvatar
-          name={displayName}
-          initials={initialsFor(displayName)}
-          size="sm"
-          avatarUrl={currentUser.profile.profile_picture_url}
-          matrixToken={matrixSession?.access_token}
-        />
-        <div className="sidebar-account-copy">
-          <strong>{displayName}</strong>
-          <span>@{currentUser.username}</span>
-        </div>
-        <button type="button" className="sidebar-icon-button" aria-label="Log out" title="Log out" onClick={onSignOut}>
-          <LogOut size={17} />
-        </button>
-      </div>
 
       <div className="sidebar-search-wrap">
         <SearchInput
           value={query}
           onChange={setQuery}
-          placeholder="Search conversations"
+          placeholder="Search conversations…"
           label="Search conversations"
         />
+      </div>
+
+      <div className="filter-chips" role="group" aria-label="Filter conversations">
+        {filters.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            className={`filter-chip${filter === id ? " is-active" : ""}`}
+            aria-pressed={filter === id}
+            onClick={() => setFilter(id)}
+          >
+            {id === "favorites" && <Star size={14} aria-hidden="true" />}
+            {id === "groups" && <UsersRound size={14} aria-hidden="true" />}
+            {label}
+            {id === "unread" && unreadConversations > 0 && (
+              <span className="filter-chip-count" aria-label={`${unreadConversations} unread conversations`}>
+                {unreadConversations}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
 
       {(requestsLoading || requestError || incomingRequests.length > 0) && (
@@ -167,8 +197,9 @@ export function ConversationSidebar({
           <p className="sidebar-empty" role="status">Loading conversations…</p>
         ) : (
           <>
-            {renderList("Direct messages", direct)}
-            {renderList("Groups", groups)}
+            {pinned.length > 0 && renderList("pinned", "Pinned", pinned)}
+            {recent.length > 0 && renderList("recent", "Recent", recent)}
+            {nothingVisible && <p className="sidebar-empty">{emptyText}</p>}
           </>
         )}
       </div>

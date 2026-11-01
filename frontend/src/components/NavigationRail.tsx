@@ -1,4 +1,5 @@
-import { Hash, MessageSquare, MessageCircle, Settings, UserRound, UsersRound, type LucideIcon } from "lucide-react";
+import { Hash, LogOut, MessageSquare, MessageCircle, Settings, UserRound, UsersRound, type LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { UserAvatar } from "./UserAvatar";
 import type { MatrixSession, PresenceState, UserProfile } from "../types";
@@ -27,14 +28,34 @@ interface NavigationRailProps {
   matrixSession: MatrixSession | null;
   presence?: PresenceState;
   onNavigate: (section: NavSection) => void;
+  onSignOut: () => void;
 }
 
 function initialsFor(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
-export function NavigationRail({ active, currentUser, matrixSession, presence, onNavigate }: NavigationRailProps) {
+export function NavigationRail({ active, currentUser, matrixSession, presence, onNavigate, onSignOut }: NavigationRailProps) {
   const name = currentUser.profile.display_name || currentUser.username;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointer = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   return (
     <nav className="nav-rail" aria-label="Primary">
       <span className="nav-rail-logo" aria-hidden="true">
@@ -58,15 +79,36 @@ export function NavigationRail({ active, currentUser, matrixSession, presence, o
           </li>
         ))}
       </ul>
-      <div className="nav-rail-user">
-        <UserAvatar
-          name={name}
-          initials={initialsFor(name)}
-          size="sm"
-          avatarUrl={currentUser.profile.profile_picture_url}
-          matrixToken={matrixSession?.access_token}
-          presence={presence}
-        />
+      <div className="nav-rail-user" ref={menuRef}>
+        <button
+          type="button"
+          className="nav-rail-avatar"
+          aria-label="Account menu"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <UserAvatar
+            name={name}
+            initials={initialsFor(name)}
+            size="md"
+            avatarUrl={currentUser.profile.profile_picture_url}
+            matrixToken={matrixSession?.access_token}
+            presence={presence}
+          />
+        </button>
+        {menuOpen && (
+          <div className="nav-rail-menu" role="menu">
+            <div className="nav-rail-menu-profile">
+              <strong>{name}</strong>
+              <span>@{currentUser.username}</span>
+            </div>
+            <button type="button" role="menuitem" onClick={onSignOut}>
+              <LogOut size={16} aria-hidden="true" />
+              Log out
+            </button>
+          </div>
+        )}
       </div>
     </nav>
   );
