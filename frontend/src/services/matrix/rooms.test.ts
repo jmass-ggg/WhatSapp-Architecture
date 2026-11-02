@@ -411,3 +411,30 @@ describe("retired encrypted rooms", () => {
     expect(legacyEncryptedRoomIds(rooms)).toEqual(["!old-joined:localhost", "!old-invite:localhost"]);
   });
 });
+
+describe("stripped group invitations", () => {
+  const inviteRoom = (name: string, isDirect?: boolean) => ({
+    roomId: "!g:localhost", name, getMembers: () => [],
+    getLiveTimeline: () => ({ getEvents: () => [] }),
+    getMyMembership: () => "invite", hasEncryptionStateEvent: () => false,
+    currentState: {
+      getStateEvents: (type: string, key: string) =>
+        type === "m.room.member" && key === "@self:localhost"
+          ? { getContent: () => ({ membership: "invite", ...(isDirect ? { is_direct: true } : {}) }) }
+          : null,
+    },
+    getUnreadNotificationCount: () => 0, getLastActiveTimestamp: () => 0,
+    guessDMUserId: () => "@inviter:localhost",
+  } as unknown as Room);
+
+  it("classifies a named, non-direct invite without marker or members as a group", () => {
+    const [c] = conversationsFromMatrixClient([inviteRoom("Team")], "@self:localhost");
+    expect(c.isGroup).toBe(true);
+    expect(c.isInvited).toBe(true);
+  });
+
+  it("keeps direct invites (is_direct) as direct chats", () => {
+    const [c] = conversationsFromMatrixClient([inviteRoom("", true)], "@self:localhost");
+    expect(c.isGroup).toBe(false);
+  });
+});

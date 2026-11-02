@@ -24,6 +24,19 @@ function hasConversationMarker(room: Room, eventType: string): boolean {
   );
 }
 
+/**
+ * Synapse's invite stripped state only carries create/name/avatar/join_rules/etc., so our custom
+ * group marker and the other members are absent. The invite's own member event is present, though:
+ * the app always sets `is_direct: true` on direct invites. A named invite that is not flagged
+ * direct is therefore a group (groups require a name; app-created directs never have one).
+ */
+function isUnmarkedGroupInvite(room: Room, ownUserId: string): boolean {
+  if (room.getMyMembership?.() !== "invite") return false;
+  if (!room.name?.trim()) return false;
+  const content = room.currentState?.getStateEvents("m.room.member", ownUserId)?.getContent();
+  return content?.membership === "invite" && content.is_direct !== true;
+}
+
 function memberDisplayName(
   member: ReturnType<Room["getMembers"]>[number] | null | undefined,
 ): string {
@@ -133,7 +146,9 @@ export function conversationFromMatrixRoom(
     );
   const hasGroupMarker = hasConversationMarker(room, MATRIX_GROUP_MARKER_TYPE);
   const hasDirectMarker = hasConversationMarker(room, MATRIX_DIRECT_MARKER_TYPE);
-  const isGroup = hasGroupMarker || (!hasDirectMarker && members.length > 1);
+  const isGroup =
+    hasGroupMarker ||
+    (!hasDirectMarker && (members.length > 1 || isUnmarkedGroupInvite(room, ownUserId)));
   const name =
     room.name?.trim() ||
     (isGroup ? "Unnamed group" : members[0]?.name) ||
@@ -193,7 +208,7 @@ export function conversationFromMatrixRoom(
     unreadCount: room.getUnreadNotificationCount() ?? 0,
     messages,
     bio: isGroup
-      ? `${members.length + 1} members in this group`
+      ? `${members.filter((m) => m.membership === "join").length + (room.getMyMembership?.() === "join" ? 1 : 0)} members in this group${members.some((m) => m.membership === "invite") ? ` · ${members.filter((m) => m.membership === "invite").length} invited` : ""}`
       : "Matrix conversation",
     isGroup,
     isInvited: room.getMyMembership?.() === "invite",
