@@ -94,6 +94,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 }: MessageListProps, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousLastMessageId = useRef<string | undefined>(undefined);
+  const previousMessageCount = useRef(0);
   const [contextMessages, setContextMessages] = useState<Message[]>([]);
   const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
   const [focusedEventId, setFocusedEventId] = useState<string | null>(null);
@@ -114,9 +115,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       if (!scroller) return;
       const burst = performance.now() - lastBurstAt.current < 400;
       if (typeof scroller.scrollTo === "function") {
+        // "instant", not "auto": the list's stylesheet sets scroll-behavior: smooth, which "auto"
+        // would defer to, animating every message of a burst instead of landing on it at once.
         scroller.scrollTo({
           top: scroller.scrollHeight,
-          behavior: burst || reducedMotion() ? "auto" : "smooth",
+          behavior: burst || reducedMotion() ? "instant" : "smooth",
         });
       } else {
         scroller.scrollTop = scroller.scrollHeight;
@@ -131,6 +134,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     if (scrollFrame.current !== null && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(scrollFrame.current);
     }
+    // The cancelled frame never runs, so it must not keep the one-frame guard closed: React's
+    // StrictMode unmounts and remounts effects in development, and a stale id here would make
+    // every later scrollToLatest return early, leaving the list stuck at the top.
+    scrollFrame.current = null;
   }, []);
   const handleScroll = useCallback(() => {
     const scroller = scrollRef.current;
@@ -177,6 +184,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   useEffect(() => {
     previousLastMessageId.current = undefined;
+    previousMessageCount.current = 0;
     setContextMessages((current) => (current.length ? [] : current));
     setPendingJumpId(null);
     setFocusedEventId(null);
@@ -186,18 +194,25 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   }, [conversation?.id, conversationRouteId]);
 
   useEffect(() => {
-    const lastMessage = conversation?.messages.at(-1);
+    const messages = conversation?.messages ?? [];
+    const lastMessage = messages.at(-1);
     const lastMessageId = lastMessage?.id;
-    if (lastMessageId && previousLastMessageId.current &&
-      lastMessageId !== previousLastMessageId.current) {
-      const now = performance.now();
-      lastBurstAt.current = now;
+    const previousId = previousLastMessageId.current;
+    if (lastMessageId && previousId && lastMessageId !== previousId) {
+      lastBurstAt.current = performance.now();
       // Own sends always follow; others only when the reader is at the bottom.
       if (lastMessage?.sender === "me") scrollToLatest(true);
       else if (stickToBottom.current) scrollToLatest();
       else setUnreadBelow((count) => count + 1);
+    } else if (lastMessageId && previousId && messages.length > previousMessageCount.current) {
+      // Grew without a new last message: a confirmed incoming message landed above own echoes
+      // that are still sending. Acknowledgments alone change neither the last id nor the count.
+      lastBurstAt.current = performance.now();
+      if (stickToBottom.current) scrollToLatest();
+      else setUnreadBelow((count) => count + 1);
     }
     previousLastMessageId.current = lastMessageId;
+    previousMessageCount.current = messages.length;
   }, [conversation?.messages, scrollToLatest]);
 
   const scrollToEvent = useCallback((eventId: string) => {
