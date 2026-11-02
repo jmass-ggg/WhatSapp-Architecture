@@ -156,3 +156,28 @@ describe("Matrix event conversion", () => {
     expect(message?.attachment).toMatchObject({ kind: "audio", mediaUri: "mxc://localhost/abc", mimeType: "audio/ogg", size: 4096, durationMs: 7500 });
   });
 });
+
+describe("stable ids across local echo and acknowledgment", () => {
+  it("keys an own message by its transaction id so the bubble is updated in place when the server id arrives", () => {
+    const local = new MatrixEvent({
+      event_id: "~!room:localhost:txn9", room_id: "!room:localhost", sender: "@self:localhost",
+      type: "m.room.message", origin_server_ts: 1_750_000_000_000, content: { msgtype: "m.text", body: "hi" },
+    });
+    local.setTxnId("txn9");
+    local.setStatus(EventStatus.SENDING);
+    const pending = messageFromMatrixEvent(local, "!room:localhost", "@self:localhost");
+    expect(pending?.id).toBe("txn:txn9");
+    expect(pending?.delivery).toBe("sending");
+    local.handleRemoteEcho({ ...local.event, event_id: "$acked:localhost", unsigned: { transaction_id: "txn9" } });
+    const acked = messageFromMatrixEvent(local, "!room:localhost", "@self:localhost");
+    expect(acked?.id).toBe("txn:txn9");
+    expect(acked?.matrix?.eventId).toBe("$acked:localhost");
+    expect(acked?.delivery).toBe("sent");
+    // After a reload the same event only carries unsigned.transaction_id: still the same id.
+    const fromSync = new MatrixEvent({ ...local.event, event_id: "$acked:localhost", unsigned: { transaction_id: "txn9" } });
+    expect(messageFromMatrixEvent(fromSync, "!room:localhost", "@self:localhost")?.id).toBe("txn:txn9");
+    // Someone else's message keeps its event id.
+    const incoming = new MatrixEvent({ ...local.event, event_id: "$theirs:localhost", sender: "@peer:localhost", unsigned: {} });
+    expect(messageFromMatrixEvent(incoming, "!room:localhost", "@self:localhost")?.id).toBe("$theirs:localhost");
+  });
+});

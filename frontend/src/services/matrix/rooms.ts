@@ -63,13 +63,75 @@ function memberDisplayName(
   return localpart || "Group member";
 }
 
+/** Only the newest messages are rendered, so older timeline events are never converted. */
+export const MAX_VISIBLE_MESSAGES = 100;
+
+/**
+ * Per-room identity cache: a message whose visible fields did not change keeps the exact same
+ * object across refreshes, so memoised bubbles skip re-rendering on typing, receipt and
+ * unrelated-message updates. Entries for messages that left the window are pruned each refresh.
+ */
+const messageIdentityCache = new WeakMap<object, Map<string, Message>>();
+
+function sameTime(left?: Date, right?: Date): boolean {
+  return (left?.getTime() ?? Number.NaN) === (right?.getTime() ?? Number.NaN) || (!left && !right);
+}
+
+/** True when every field a bubble renders is equal, so the previous object can be reused. */
+function sameVisibleMessage(previous: Message, next: Message): boolean {
+  if (
+    previous.id !== next.id ||
+    previous.matrix?.eventId !== next.matrix?.eventId ||
+    previous.sender !== next.sender ||
+    previous.senderName !== next.senderName ||
+    previous.text !== next.text ||
+    previous.delivery !== next.delivery ||
+    previous.mentionsMe !== next.mentionsMe ||
+    !sameTime(previous.sentAt, next.sentAt) ||
+    !sameTime(previous.readAt, next.readAt)
+  ) return false;
+  const pr = previous.replyTo, nr = next.replyTo;
+  if (Boolean(pr) !== Boolean(nr) || (pr && nr && (pr.eventId !== nr.eventId || pr.sender !== nr.sender || pr.text !== nr.text))) return false;
+  const pa = previous.attachment, na = next.attachment;
+  if (Boolean(pa) !== Boolean(na) || (pa && na && (
+    pa.name !== na.name || pa.size !== na.size || pa.mimeType !== na.mimeType || pa.kind !== na.kind ||
+    pa.mediaUri !== na.mediaUri || pa.url !== na.url || pa.durationMs !== na.durationMs
+  ))) return false;
+  const px = previous.reaction, nx = next.reaction;
+  if (Boolean(px) !== Boolean(nx) || (px && nx && (px.emoji !== nx.emoji || px.count !== nx.count))) return false;
+  const ps = previous.segments, ns = next.segments;
+  if (Boolean(ps) !== Boolean(ns)) return false;
+  if (ps && ns) {
+    if (ps.length !== ns.length) return false;
+    for (let i = 0; i < ps.length; i++) if (ps[i].text !== ns[i].text || ps[i].userId !== ns[i].userId) return false;
+  }
+  return true;
+}
+
+function stabilizeIdentities(room: Room, messages: Message[]): Message[] {
+  let cache = messageIdentityCache.get(room);
+  if (!cache) {
+    cache = new Map();
+    messageIdentityCache.set(room, cache);
+  }
+  const keep = new Set<string>();
+  const result = messages.map((message) => {
+    keep.add(message.id);
+    const cached = cache.get(message.id);
+    if (cached && sameVisibleMessage(cached, message)) return cached;
+    cache.set(message.id, message);
+    return message;
+  });
+  for (const id of cache.keys()) if (!keep.has(id)) cache.delete(id);
+  return result;
+}
+
 function timelineMessages(
   room: Room,
   ownUserId: string,
   isGroup: boolean,
   recipientId?: string,
 ): Message[] {
-  const byEventId = new Map<string, Message>();
   const events = room.getLiveTimeline().getEvents();
   const members = room.getMembers();
   const otherMembers = members.filter(
@@ -80,16 +142,11 @@ function timelineMessages(
   const receipt = !isGroup && recipientId
     ? room.getReadReceiptForUserId?.(recipientId, true, ReceiptType.Read)
     : null;
-  const receiptIndex = receipt
-    ? events.findIndex((event) => event.getId() === receipt.eventId)
-    : -1;
   const readAt = receipt && Number.isFinite(receipt.data.ts) &&
     Math.abs(receipt.data.ts) <= 8.64e15
     ? new Date(receipt.data.ts)
     : undefined;
-  for (const [index, event] of events.entries()) {
-    const message = messageFromMatrixEvent(event, room.roomId, ownUserId);
-    if (!message) continue;
+  const decorate = (message: Message, event: MatrixEvent) => {
     if (isGroup && message.sender === "them") {
       const senderId = message.matrix?.senderId ?? event.getSender() ?? "";
       message.senderName = memberDisplayName(
@@ -105,32 +162,77 @@ function timelineMessages(
         ? "You"
         : friendlyName || (otherMembers.length === 1 ? "Contact" : "A participant");
     }
+  };
+
+  const byId = new Map<string, Message>();
+  const byEventId = new Map<string, Message>();
+  // Ids of own messages still in any sending phase (queued, sending, acknowledged but not yet
+  // echoed back by sync, failed): their timestamps are local, not the server's.
+  const localIds = new Set<string>();
+  // The peer's receipt marks that event and everything older as read.
+  let readFromHere = false;
+  // Newest first; stop once the visible window is full so a long timeline costs nothing extra.
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (receipt && !readFromHere && event.getId() === receipt.eventId) readFromHere = true;
+    const message = messageFromMatrixEvent(event, room.roomId, ownUserId);
+    if (!message) continue;
+    const duplicate = byId.get(message.id);
+    if (duplicate) {
+      // Same id again, older in the timeline: keep the newest data at the oldest position.
+      byId.delete(message.id);
+      byId.set(message.id, duplicate);
+      continue;
+    }
+    decorate(message, event);
+    if (event.status) localIds.add(message.id);
     if (!isGroup && message.sender === "me" && message.delivery === "sent" &&
-      receiptIndex >= index &&
-      !event.getId()?.startsWith("~")) {
+      readFromHere && !event.getId()?.startsWith("~")) {
       message.delivery = "read";
       if (readAt) message.readAt = readAt;
     }
-    byEventId.set(message.id, message);
+    byId.set(message.id, message);
+    if (message.matrix?.eventId) byEventId.set(message.matrix.eventId, message);
+    if (byId.size >= MAX_VISIBLE_MESSAGES) break;
   }
-  for (const message of byEventId.values()) {
+
+  const resolveOriginal = (eventId: string): Message | undefined => {
+    const inWindow = byEventId.get(eventId);
+    if (inWindow) return inWindow;
+    // Older than the window: look the event up directly instead of converting the whole timeline.
+    const event = room.findEventById?.(eventId);
+    const original = event ? messageFromMatrixEvent(event, room.roomId, ownUserId) : null;
+    if (original && event) decorate(original, event);
+    return original ?? undefined;
+  };
+  for (const message of byId.values()) {
     if (!message.replyTo?.eventId) continue;
-    const original = byEventId.get(message.replyTo.eventId);
+    const original = resolveOriginal(message.replyTo.eventId);
     message.replyTo = original
       ? { eventId: message.replyTo.eventId, sender: original.sender === "me" ? "You" : original.senderName || "Unknown", text: original.text || original.attachment?.name || "Message unavailable" }
       : { eventId: message.replyTo.eventId, sender: "Original message", text: "Original message unavailable" };
   }
-  return [...byEventId.values()]
-    .sort((left, right) => (left.sentAt?.getTime() ?? 0) - (right.sentAt?.getTime() ?? 0))
-    .slice(-100);
+  // Collected newest-first: restore timeline order, then order messages that carry a server
+  // timestamp by it with a stable sort (the order both participants see, also after a reload).
+  // Own messages still in a sending phase keep their timeline order *after* every such message:
+  // they only have local timestamps (the SDK keeps the local one even after the send response,
+  // until the sync echo arrives), so sorting them in with the rest would make a just-echoed
+  // message, whose server timestamp is later than the local ones of the echoes sent after it,
+  // jump below them on every acknowledgment.
+  const ordered = [...byId.values()].reverse();
+  const confirmed: Message[] = [];
+  const pending: Message[] = [];
+  for (const message of ordered) (localIds.has(message.id) ? pending : confirmed).push(message);
+  confirmed.sort((left, right) => (left.sentAt?.getTime() ?? 0) - (right.sentAt?.getTime() ?? 0));
+  return stabilizeIdentities(room, pending.length ? confirmed.concat(pending) : confirmed);
 }
 
 function latestVisibleEvent(room: Room): MatrixEvent | undefined {
-  return [...room.getLiveTimeline().getEvents()]
-    .reverse()
-    .find((event) =>
-      event.getType() === "m.room.message",
-    );
+  const events = room.getLiveTimeline().getEvents();
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (events[index].getType() === "m.room.message") return events[index];
+  }
+  return undefined;
 }
 
 export function conversationFromMatrixRoom(

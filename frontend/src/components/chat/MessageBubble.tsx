@@ -1,5 +1,6 @@
 import { Check, CheckCheck, Clock3, MoreHorizontal, Pin, PinOff, Reply, Star } from "lucide-react";
 import {
+  memo,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -11,9 +12,12 @@ import { UserAvatar } from "../UserAvatar";
 import { AttachmentCard } from "./AttachmentCard";
 import type { Conversation, MatrixSession, Message } from "../../types";
 
+/** The conversation fields a bubble reads; MessageList passes a memoised object of just these. */
+export type BubbleConversation = Pick<Conversation, "isGroup" | "name" | "initials" | "accent" | "avatarUrl">;
+
 interface MessageBubbleProps {
   message: Message;
-  conversation: Conversation;
+  conversation: BubbleConversation;
   matrixSession: MatrixSession | null;
   ownAvatar?: { name: string; avatarUrl?: string | null };
   onReply?: (message: Message) => void;
@@ -71,7 +75,8 @@ function Receipt({ delivery, onRetry }: { delivery: Message["delivery"]; onRetry
   );
 }
 
-export function MessageBubble({
+/** Memoised: with stable message identities only the bubbles whose data changed re-render. */
+export const MessageBubble = memo(function MessageBubble({
   message,
   conversation,
   matrixSession,
@@ -354,4 +359,4 @@ export function MessageBubble({
       )}
     </article>
   );
-}
+});

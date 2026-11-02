@@ -1,4 +1,5 @@
 import { CheckCheck, Check, Clock3, Pin, Star, UsersRound } from "lucide-react";
+import { memo } from "react";
 
 import { UserAvatar } from "../UserAvatar";
 import type { Conversation } from "../../types";
@@ -9,7 +10,7 @@ interface ConversationListItemProps {
   matrixToken?: string | null;
   isFavorite?: boolean;
   isPinned?: boolean;
-  onSelect: () => void;
+  onSelect: (conversation: Conversation) => void;
 }
 
 export function formatActivity(date: Date, now: Date = new Date()): string {
@@ -21,7 +22,8 @@ export function formatActivity(date: Date, now: Date = new Date()): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-export function ConversationListItem({
+/** Memoised so an update in one room does not re-render every row in the sidebar. */
+export const ConversationListItem = memo(function ConversationListItem({
   conversation,
   selected,
   matrixToken,
@@ -39,7 +41,7 @@ export function ConversationListItem({
     <button
       className={`conversation-row${selected ? " is-selected" : ""}`}
       type="button"
-      onClick={onSelect}
+      onClick={() => onSelect(conversation)}
       aria-current={selected ? "page" : undefined}
     >
       <UserAvatar
@@ -107,4 +109,4 @@ export function ConversationListItem({
       </span>
     </button>
   );
-}
+});

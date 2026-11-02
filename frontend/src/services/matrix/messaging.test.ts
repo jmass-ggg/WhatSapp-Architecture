@@ -225,9 +225,10 @@ describe("queueTextMessage (local acceptance vs acknowledgment)", () => {
 describe("retryFailedMessage", () => {
   it("resends the original pending event instead of creating a new one", async () => {
     const { client, sendMessage } = mockClient();
-    const event = { getId: () => "~txn1" };
+    const event = { getId: () => "~txn1", status: "not_sent" };
     const room = client.getRoom(roomId) as unknown as Record<string, unknown>;
-    room.getPendingEvents = () => [event];
+    // Default pendingEventOrdering is chronological: pending events are only reachable by id.
+    room.findEventById = (id: string) => (id === "~txn1" ? event : undefined);
     const resendEvent = vi.fn(async () => "$id");
     (client as unknown as Record<string, unknown>).resendEvent = resendEvent;
     await retryFailedMessage(client, roomId, "~txn1");

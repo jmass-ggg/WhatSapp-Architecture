@@ -1,5 +1,5 @@
 import type { MatrixClient } from "matrix-js-sdk";
-import { EventType, MsgType, Preset, Visibility } from "matrix-js-sdk";
+import { EventStatus, EventType, MsgType, Preset, Visibility } from "matrix-js-sdk";
 import type { ISendEventResponse } from "matrix-js-sdk";
 import { buildMentionContent, type MentionEntity } from "./mentions";
 
@@ -183,8 +183,11 @@ export function sendTextMessage(
 /** Retries the original failed event through the SDK, reusing its transaction ID. */
 export async function retryFailedMessage(client: MatrixClient, roomId: string, eventId: string): Promise<void> {
   const room = client.getRoom(roomId);
-  const event = room?.getPendingEvents().find((candidate) => candidate.getId() === eventId);
-  if (!room || !event) throw new Error("This message can no longer be retried.");
+  // Pending events live in the live timeline (default chronological ordering), so look them up by id.
+  const event = room?.findEventById(eventId);
+  if (!room || !event || event.status !== EventStatus.NOT_SENT) {
+    throw new Error("This message can no longer be retried.");
+  }
   if (room.getMyMembership() !== "join") throw new Error("Join the room before sending a message.");
   await client.resendEvent(event, room);
 }

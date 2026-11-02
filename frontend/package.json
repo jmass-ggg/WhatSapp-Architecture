@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
+    "perf": "vitest run --config vitest.perf.config.ts",
     "test:matrix-live": "node scripts/matrix-live-test.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },

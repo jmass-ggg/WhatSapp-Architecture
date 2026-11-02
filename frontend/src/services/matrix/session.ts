@@ -377,7 +377,9 @@ export class MatrixClientSession {
     this.conversationCache.markRoom(roomId);
     if (this.refreshQueued) return;
     this.refreshQueued = true;
-    queueMicrotask(() => {
+    // A macrotask (not a microtask) so every room event from one sync response, which the SDK
+    // processes across many awaits, lands in a single snapshot and a single React commit.
+    setTimeout(() => {
       this.refreshQueued = false;
       if (!this.disposed && this.snapshot.initialSyncComplete) {
         this.publish(this.readRooms());

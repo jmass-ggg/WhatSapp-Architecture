@@ -9,7 +9,7 @@ import {
 } from "react";
 import { MessageCircleMore } from "lucide-react";
 
-import { MessageBubble } from "./MessageBubble";
+import { MessageBubble, type BubbleConversation } from "./MessageBubble";
 import type { Conversation, MatrixSession, Message } from "../../types";
 
 interface MessageListProps {
@@ -140,14 +140,22 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     if (near) setUnreadBelow(0);
   }, []);
   const messages = useMemo(() => {
-    const combined = new Map<string, Message>();
-    const currentContextMessages = contextMessages.filter(
-      (message) => message.matrix?.roomId === conversation?.id,
+    // Conversation messages stay in Matrix timeline order (never re-sorted by timestamp, which
+    // would reorder acknowledged echoes); jumped-to context messages are merged in by time.
+    const timeline = conversation?.messages ?? [];
+    const known = new Set(timeline.map((message) => message.matrix?.eventId || message.id));
+    const extra = contextMessages.filter(
+      (message) => message.matrix?.roomId === conversation?.id && !known.has(message.matrix?.eventId || message.id),
     );
-    for (const message of [...(conversation?.messages ?? []), ...currentContextMessages]) {
-      combined.set(message.matrix?.eventId || message.id, message);
+    const positioned = timeline.map((message, index) => ({ message, position: index }));
+    for (const message of extra) {
+      const time = message.sentAt?.getTime() ?? 0;
+      const next = timeline.findIndex((candidate) => (candidate.sentAt?.getTime() ?? 0) > time);
+      positioned.push({ message, position: (next === -1 ? timeline.length : next) - 0.5 });
     }
-    return [...combined.values()]
+    return positioned
+      .sort((left, right) => left.position - right.position)
+      .map(({ message }) => message)
       .filter((message) => {
         if (message.matrix?.eventId === focusedEventId) return true;
         if (!term) return true;
@@ -156,14 +164,20 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           message.attachment?.name.toLowerCase().includes(term) ||
           message.replyTo?.text.toLowerCase().includes(term)
         );
-      })
-      .sort((left, right) => (left.sentAt?.getTime() ?? 0) - (right.sentAt?.getTime() ?? 0));
+      });
   }, [contextMessages, conversation?.messages, focusedEventId, term]);
   const groups = useMemo(() => groupByDay(messages), [messages]);
+  // Bubbles only read these fields; a fresh Conversation object per sync must not re-render them.
+  const bubbleConversation = useMemo<BubbleConversation | null>(
+    () => conversation
+      ? { isGroup: conversation.isGroup, name: conversation.name, initials: conversation.initials, accent: conversation.accent, avatarUrl: conversation.avatarUrl }
+      : null,
+    [conversation?.isGroup, conversation?.name, conversation?.initials, conversation?.accent, conversation?.avatarUrl],
+  );
 
   useEffect(() => {
     previousLastMessageId.current = undefined;
-    setContextMessages([]);
+    setContextMessages((current) => (current.length ? [] : current));
     setPendingJumpId(null);
     setFocusedEventId(null);
     setUnreadBelow(0);
@@ -202,7 +216,12 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     return true;
   }, []);
 
+  // Read through refs so jumpTo (and the onJump handed to every memoised bubble) keeps one
+  // identity even when the parent passes a fresh loader or error handler on a re-render.
+  const jumpHandlersRef = useRef({ onLoadMessage, onJumpError });
+  jumpHandlersRef.current = { onLoadMessage, onJumpError };
   const jumpTo = useCallback(async (eventId: string) => {
+    const { onLoadMessage, onJumpError } = jumpHandlersRef.current;
     setFocusedEventId(eventId);
     if (scrollToEvent(eventId)) return;
     if (!onLoadMessage) {
@@ -224,13 +243,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         ? error.message
         : "That message could not be loaded.");
     }
-  }, [onJumpError, onLoadMessage, scrollToEvent]);
+  }, [scrollToEvent]);
 
   useImperativeHandle(
     ref,
     () => ({ jumpTo }),
     [jumpTo],
   );
+  const handleJump = useCallback((eventId: string) => { void jumpTo(eventId); }, [jumpTo]);
 
   useEffect(() => {
     if (!pendingJumpId || !scrollToEvent(pendingJumpId)) return;
@@ -278,7 +298,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               <MessageBubble
                 key={message.id}
                 message={message}
-                conversation={conversation}
+                conversation={bubbleConversation ?? conversation}
                 matrixSession={matrixSession}
                 ownAvatar={ownAvatar}
                 isStarred={Boolean(message.matrix?.eventId && starredEventIds?.has(message.matrix.eventId))}
@@ -290,7 +310,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 canManagePins={canManagePins}
                 canPinNewMessage={pinnedEventIds.size < 3}
                 onTogglePin={onTogglePin}
-                onJump={(eventId) => void jumpTo(eventId)}
+                onJump={handleJump}
               />
             ))}
           </section>

@@ -85,7 +85,7 @@ export function ConversationSidebar({
               matrixToken={matrixSession?.access_token}
               isFavorite={favoriteIds.has(conversation.id)}
               isPinned={pinnedIds.has(conversation.id)}
-              onSelect={() => onSelect(conversation)}
+              onSelect={onSelect}
             />
           </div>
         ))}

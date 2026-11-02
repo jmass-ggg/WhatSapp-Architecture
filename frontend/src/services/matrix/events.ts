@@ -53,6 +53,10 @@ export function messageFromMatrixEvent(
       ? new Date(event.localTimestamp)
       : undefined;
   const eventId = event.getId();
+  // A message sent from this device keeps one id from local echo through server acknowledgment,
+  // so its bubble is updated in place instead of being unmounted when the "~" id becomes "$".
+  const unsignedTxn = (event.getUnsigned?.() as { transaction_id?: unknown } | undefined)?.transaction_id;
+  const txnId = event.getTxnId?.() || (typeof unsignedTxn === "string" ? unsignedTxn : undefined);
 
   // Retired encrypted events are never surfaced as messages.
   if (wireType !== "m.room.message" || eventType !== "m.room.message") return null;
@@ -80,7 +84,7 @@ export function messageFromMatrixEvent(
   const mentionIds = (content["m.mentions"] as { user_ids?: unknown } | undefined)?.user_ids;
   const segments = isFile ? undefined : parseMentionSegments(content);
   return {
-    id: eventId ?? `local-${senderId}-${event.getTs()}-${body}`,
+    id: txnId ? `txn:${txnId}` : eventId ?? `local-${senderId}-${event.getTs()}-${body}`,
     sender: senderId === ownUserId ? "me" : "them",
     senderName: undefined,
     text: isFile ? "" : body,

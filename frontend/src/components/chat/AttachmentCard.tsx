@@ -59,6 +59,7 @@ export function AttachmentCard({ attachment, matrixToken }: AttachmentCardProps)
             src={mediaSource}
             alt={attachment.name}
             loading="lazy"
+            decoding="async"
             onError={() => setLoadError(true)}
           />
         ) : (

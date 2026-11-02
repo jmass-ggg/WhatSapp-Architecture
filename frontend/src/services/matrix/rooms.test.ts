@@ -149,7 +149,7 @@ describe("Matrix room mapping", () => {
     expect(conversation.messages[0].senderName).not.toContain("@charlie");
   });
 
-  it("shows plaintext invitations and keeps unique messages in timestamp order", () => {
+  it("shows plaintext invitations and keeps unique messages in timeline order", () => {
     const later = new MatrixEvent({
       event_id: "$later:localhost", room_id: "!invite:localhost",
       sender: "@other:localhost", type: "m.room.message",
@@ -162,7 +162,7 @@ describe("Matrix room mapping", () => {
     });
     const room = {
       roomId: "!invite:localhost", name: "", getMembers: () => [],
-      getLiveTimeline: () => ({ getEvents: () => [later, earlier, later] }),
+      getLiveTimeline: () => ({ getEvents: () => [earlier, later, later] }),
       getMyMembership: () => "invite", hasEncryptionStateEvent: () => false,
       getUnreadNotificationCount: () => 2, getLastActiveTimestamp: () => Number.MIN_SAFE_INTEGER,
       guessDMUserId: () => "@other:localhost",
@@ -458,5 +458,99 @@ describe("ConversationCache", () => {
     const byId = (list: typeof first, id: string) => list.find((c) => c.roomId === id);
     expect(byId(second, "!b:l")).toBe(byId(first, "!b:l"));
     expect(byId(second, "!a:l")).not.toBe(byId(first, "!a:l"));
+  });
+});
+
+describe("timeline window and message identity", () => {
+  const makeEvent = (id: string, sender: string, ts: number, extra: Record<string, unknown> = {}) => new MatrixEvent({
+    event_id: id, room_id: "!win:localhost", sender, type: "m.room.message",
+    origin_server_ts: ts, content: { msgtype: "m.text", body: `body ${id}`, ...extra },
+  });
+  // A direct chat: one joined peer whose display name is just their Matrix id.
+  const peer = { userId: "@peer:localhost", membership: "join", name: "@peer:localhost", events: {} };
+  const roomWith = (events: MatrixEvent[]) => ({
+    roomId: "!win:localhost", name: "Chat", getMembers: () => [peer],
+    getLiveTimeline: () => ({ getEvents: () => events }),
+    findEventById: (id: string) => events.find((event) => event.getId() === id),
+    hasEncryptionStateEvent: () => false, getUnreadNotificationCount: () => 0,
+    getLastActiveTimestamp: () => 0, currentState: { getStateEvents: () => null },
+  }) as unknown as Room;
+
+  it("renders only the newest 100 messages and still resolves replies to older ones", () => {
+    const events = Array.from({ length: 250 }, (_, i) => makeEvent(`$e${i}`, "@peer:localhost", 1000 + i));
+    events.push(makeEvent("$reply", "@self:localhost", 2000, { "m.relates_to": { "m.in_reply_to": { event_id: "$e3" } } }));
+    const { messages } = conversationFromMatrixRoom(roomWith(events), "@self:localhost");
+    expect(messages).toHaveLength(100);
+    expect(messages[0].id).toBe("$e151");
+    expect(messages.at(-1)?.replyTo).toEqual({ eventId: "$e3", sender: "Contact", text: "body $e3" });
+  });
+
+  it("keeps the same Message objects across refreshes when nothing visible changed", () => {
+    const events = [makeEvent("$a", "@peer:localhost", 1), makeEvent("$b", "@self:localhost", 2)];
+    const room = roomWith(events);
+    const first = conversationFromMatrixRoom(room, "@self:localhost").messages;
+    const second = conversationFromMatrixRoom(room, "@self:localhost").messages;
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).toBe(first[1]);
+    events.push(makeEvent("$c", "@peer:localhost", 3));
+    const third = conversationFromMatrixRoom(room, "@self:localhost").messages;
+    expect(third.slice(0, 2)).toEqual([first[0], first[1]]);
+    expect(third[0]).toBe(first[0]);
+    expect(third[2].id).toBe("$c");
+    events[1].setStatus(EventStatus.NOT_SENT);
+    const fourth = conversationFromMatrixRoom(room, "@self:localhost").messages;
+    const failed = fourth.find((message) => message.id === "$b");
+    expect(fourth[0]).toBe(first[0]);
+    expect(failed).not.toBe(first[1]);
+    expect(failed?.delivery).toBe("failed");
+    // Messages that never reached the server are listed after every confirmed one.
+    expect(fourth.at(-1)).toBe(failed);
+  });
+
+  it("keeps an acknowledged echo in timeline position even when its server timestamp is later than a newer pending echo", () => {
+    const first = makeEvent("~first", "@self:localhost", 1000);
+    const second = makeEvent("~second", "@self:localhost", 1005);
+    first.setTxnId("txn1");
+    second.setTxnId("txn2");
+    first.setStatus(EventStatus.SENDING);
+    second.setStatus(EventStatus.SENDING);
+    const room = roomWith([first, second]);
+    const before = conversationFromMatrixRoom(room, "@self:localhost").messages;
+    expect(before.map((m) => m.id)).toEqual(["txn:txn1", "txn:txn2"]);
+    // Server acknowledges the first message with a later timestamp than the second local echo.
+    first.handleRemoteEcho({ ...first.event, event_id: "$first:localhost", origin_server_ts: 1050, unsigned: { transaction_id: "txn1" } });
+    const after = conversationFromMatrixRoom(room, "@self:localhost").messages;
+    expect(after.map((m) => m.id)).toEqual(["txn:txn1", "txn:txn2"]);
+    expect(after[0].matrix?.eventId).toBe("$first:localhost");
+    expect(after[0].delivery).toBe("sent");
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it("keeps echoes in send order while they await their sync echo, then settles into server-timestamp order", () => {
+    const peerEarlier = makeEvent("$peer:localhost", "@peer:localhost", 900);
+    const first = makeEvent("~first", "@self:localhost", 1000);
+    const second = makeEvent("~second", "@self:localhost", 1001);
+    first.setTxnId("txn1");
+    second.setTxnId("txn2");
+    first.setStatus(EventStatus.SENDING);
+    second.setStatus(EventStatus.QUEUED);
+    const room = roomWith([peerEarlier, first, second]);
+    const ids = () => conversationFromMatrixRoom(room, "@self:localhost").messages.map((m) => m.id);
+    expect(ids()).toEqual(["$peer:localhost", "txn:txn1", "txn:txn2"]);
+    // The send response gives the first echo its server id; its timestamp is still the local one.
+    first.replaceLocalEventId("$first:localhost");
+    first.setStatus(EventStatus.SENT);
+    second.setStatus(EventStatus.SENDING);
+    expect(ids()).toEqual(["$peer:localhost", "txn:txn1", "txn:txn2"]);
+    // Sync echoes the first event with a server timestamp later than the second echo's local one.
+    first.handleRemoteEcho({ ...first.event, event_id: "$first:localhost", origin_server_ts: 1300, unsigned: { transaction_id: "txn1" } });
+    expect(ids()).toEqual(["$peer:localhost", "txn:txn1", "txn:txn2"]);
+    second.replaceLocalEventId("$second:localhost");
+    second.setStatus(EventStatus.SENT);
+    second.handleRemoteEcho({ ...second.event, event_id: "$second:localhost", origin_server_ts: 1350, unsigned: { transaction_id: "txn2" } });
+    expect(ids()).toEqual(["$peer:localhost", "txn:txn1", "txn:txn2"]);
+    // A peer message the server placed between them (by timestamp) is ordered by that timestamp.
+    room.getLiveTimeline().getEvents().push(makeEvent("$between:localhost", "@peer:localhost", 1320));
+    expect(ids()).toEqual(["$peer:localhost", "txn:txn1", "$between:localhost", "txn:txn2"]);
   });
 });

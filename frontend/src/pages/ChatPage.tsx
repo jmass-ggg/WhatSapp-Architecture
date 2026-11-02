@@ -126,31 +126,57 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
     [contacts.connections],
   );
 
+  // Decorated conversations are reused while their room, connection and presence inputs are
+  // unchanged, so an event in one room keeps every other conversation's identity (and the
+  // selected conversation's) stable for memoised children.
+  const decoratedConversations = useRef(new Map<string, { room?: Conversation; connection?: UserConnection; presence?: string; value: Conversation }>());
   const conversations = useMemo(() => {
+    const previous = decoratedConversations.current;
+    const next = new Map<string, { room?: Conversation; connection?: UserConnection; presence?: string; value: Conversation }>();
     const roomConversations = matrix.rooms.map((room) => {
-      if (room.isGroup) return { ...room, presence: undefined, connectionAllowed: true };
-      const connection = room.matrixUserId ? connectionsByMatrixUserId.get(room.matrixUserId) : undefined;
+      const connection = room.isGroup || !room.matrixUserId ? undefined : connectionsByMatrixUserId.get(room.matrixUserId);
+      const presenceState = room.isGroup ? undefined : room.matrixUserId ? presence[room.matrixUserId] ?? "unknown" : "unknown";
+      const cached = previous.get(room.id);
+      if (cached && cached.room === room && cached.connection === connection && cached.presence === presenceState) {
+        next.set(room.id, cached);
+        return cached.value;
+      }
       const contact = connection?.other_user;
-      return {
-        ...room,
-        contactUserId: contact?.id,
-        connectionUserId: contact?.id,
-        connectionAllowed: Boolean(connection),
-        presence: room.matrixUserId ? presence[room.matrixUserId] ?? "unknown" : "unknown",
-        name: contact?.profile?.display_name || contact?.username || room.name,
-        username: contact?.username || room.username,
-        jobTitle: contact?.profile?.job_title ?? undefined,
-        department: contact?.profile?.department ?? undefined,
-        about: contact?.profile?.bio ?? undefined,
-        avatarUrl: contact?.profile?.profile_picture_url ?? room.avatarUrl,
-      };
+      const value: Conversation = room.isGroup
+        ? { ...room, presence: undefined, connectionAllowed: true }
+        : {
+            ...room,
+            contactUserId: contact?.id,
+            connectionUserId: contact?.id,
+            connectionAllowed: Boolean(connection),
+            presence: presenceState as Conversation["presence"],
+            name: contact?.profile?.display_name || contact?.username || room.name,
+            username: contact?.username || room.username,
+            jobTitle: contact?.profile?.job_title ?? undefined,
+            department: contact?.profile?.department ?? undefined,
+            about: contact?.profile?.bio ?? undefined,
+            avatarUrl: contact?.profile?.profile_picture_url ?? room.avatarUrl,
+          };
+      next.set(room.id, { room, connection, presence: presenceState, value });
+      return value;
     });
     const withRooms = new Set(
       roomConversations.filter((room) => !room.isGroup && room.matrixUserId).map((room) => room.matrixUserId as string),
     );
     const withoutRooms = contacts.connections
       .filter((c) => !withRooms.has(matrixUserIdForAppUserId(c.other_user.id)))
-      .map(conversationForContact);
+      .map((connection) => {
+        const key = `contact:${connection.id}`;
+        const cached = previous.get(key);
+        if (cached && cached.connection === connection) {
+          next.set(key, cached);
+          return cached.value;
+        }
+        const value = conversationForContact(connection);
+        next.set(key, { connection, value });
+        return value;
+      });
+    decoratedConversations.current = next;
     return [...roomConversations, ...withoutRooms].sort(
       (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
     );
@@ -223,15 +249,23 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [selectedRoom, selectedConversation?.messages, matrix.rooms],
   );
+  // Read through a ref so the callback identity does not change on every room event.
+  const mentionMembersRef = useRef(mentionMembers);
+  mentionMembersRef.current = mentionMembers;
   const openMention = useCallback((userId: string) => {
     // Resolve by Matrix ID within this room only; never by display name.
-    if (!mentionMembers.some((m) => m.userId === userId)) {
+    if (!mentionMembersRef.current.some((m) => m.userId === userId)) {
       notify("That person is no longer in this conversation.", "error");
       return;
     }
     setHighlightedMember(userId);
     setInfoOpen(true);
-  }, [mentionMembers, notify]);
+  }, [notify]);
+  const ownAvatar = useMemo(
+    () => ({ name: user?.profile.display_name || user?.username || "", avatarUrl: user?.profile.profile_picture_url }),
+    [user?.profile.display_name, user?.profile.profile_picture_url, user?.username],
+  );
+  const handleJumpError = useCallback((message: string) => notify(message, "error"), [notify]);
   const canManagePins = canManagePinnedMessages(selectedRoom, ownMatrixUserId);
   useEffect(() => setActivePinnedIndex(0), [selectedId]);
 
@@ -251,17 +285,22 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
     timelineKey: selectedConversation?.messages,
   });
 
+  // Callbacks handed to memoised bubbles read the selection through refs: a new conversation
+  // snapshot per room event must not change their identity (that would re-render every bubble).
+  const selectionRef = useRef({ conversation: selectedConversation, room: selectedRoom });
+  selectionRef.current = { conversation: selectedConversation, room: selectedRoom };
   const loadMessageForJump = useCallback(
     async (eventId: string) => {
-      if (!client || !selectedRoom || !selectedConversation) {
+      const { conversation, room } = selectionRef.current;
+      if (!client || !room || !conversation) {
         throw new Error("Select a joined conversation before opening that message.");
       }
       return loadMatrixMessage(
-        client, selectedRoom, eventId,
-        selectedConversation.isGroup ? "A participant" : selectedConversation.name, true,
+        client, room, eventId,
+        conversation.isGroup ? "A participant" : conversation.name, true,
       );
     },
-    [client, selectedConversation, selectedRoom],
+    [client],
   );
 
   const togglePinnedMessage = useCallback(
@@ -459,12 +498,13 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
 
   const retryMessage = useCallback(
     (message: Message) => {
-      const roomId = selectedConversation?.roomId ?? selectedConversation?.id;
+      const conversation = selectionRef.current.conversation;
+      const roomId = conversation?.roomId ?? conversation?.id;
       if (!client || !roomId || !message.matrix?.eventId) return;
       retryFailedMessage(client, roomId, message.matrix.eventId).catch((cause) =>
         notify(errorMessage(cause, "Retry failed."), "error"));
     },
-    [client, notify, selectedConversation],
+    [client, notify],
   );
 
   const sendVoice = useCallback(
@@ -500,6 +540,12 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
       }
     },
     [notify, selectedId, starred.toggle],
+  );
+
+  const handleToggleStar = useCallback((eventId: string) => { void toggleStar(eventId); }, [toggleStar]);
+  const handleSelectConversation = useCallback(
+    (conversation: Conversation) => { void selectConversation(conversation); },
+    [selectConversation],
   );
 
   const closeSearch = useCallback(() => {
@@ -585,7 +631,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
           requestsLoading={contacts.loading}
           requestError={contacts.error}
           respondingRequestId={respondingRequestId}
-          onSelect={(conversation) => void selectConversation(conversation)}
+          onSelect={handleSelectConversation}
           onAcceptRequest={(request) => void respondToRequest(request, "accept")}
           onDeclineRequest={(request) => void respondToRequest(request, "decline")}
           onNewChat={() => setDialog("chat")}
@@ -684,16 +730,13 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
             onRetry={retryMessage}
             onMentionClick={openMention}
             starredEventIds={starredEventIds}
-            onToggleStar={(eventId) => void toggleStar(eventId)}
-            ownAvatar={{
-              name: user.profile.display_name || user.username,
-              avatarUrl: user.profile.profile_picture_url,
-            }}
+            onToggleStar={handleToggleStar}
+            ownAvatar={ownAvatar}
             pinnedEventIds={pins.pinnedEventIdSet}
             canManagePins={canManagePins}
             onTogglePin={togglePinnedMessage}
             onLoadMessage={loadMessageForJump}
-            onJumpError={(message) => notify(message, "error")}
+            onJumpError={handleJumpError}
           />
 
           {selectedConversation && isDirect && !selectedConversation.connectionAllowed && (
