@@ -221,3 +221,101 @@ describe("MessageComposer mentions", () => {
     expect(screen.getByRole("option", { name: /Zed/ })).toBeTruthy();
   });
 });
+
+describe("MessageComposer focus after send", () => {
+  const box = () => screen.getByLabelText("Write a message") as HTMLTextAreaElement;
+  const flush = () => act(async () => { await Promise.resolve(); });
+
+  it("Enter sends and restores an enabled, focused textarea, twice in a row", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(<MessageComposer onSend={onSend} />);
+    for (const text of ["Hello", "How are you?"]) {
+      box().focus();
+      fireEvent.change(box(), { target: { value: text } });
+      fireEvent.keyDown(box(), { key: "Enter" });
+      await flush();
+      expect(onSend).toHaveBeenLastCalledWith(text, undefined);
+      expect(box().disabled).toBe(false);
+      expect(box().value).toBe("");
+      expect(document.activeElement).toBe(box());
+      expect(box().selectionStart).toBe(0);
+    }
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("clicking Send restores focus and focuses only after re-enable", async () => {
+    let release!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    render(<MessageComposer onSend={onSend} />);
+    fireEvent.change(box(), { target: { value: "Hi" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(box().disabled).toBe(true);
+    expect(document.activeElement).not.toBe(box());
+    await act(async () => { release(); await Promise.resolve(); });
+    expect(box().disabled).toBe(false);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("keeps the draft and returns focus when a send fails", async () => {
+    const onSend = vi.fn().mockRejectedValue(new Error("offline"));
+    render(<MessageComposer onSend={onSend} />);
+    box().focus();
+    fireEvent.change(box(), { target: { value: "draft" } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+    await flush();
+    expect(box().value).toBe("draft");
+    expect(screen.getByRole("alert").textContent).toContain("offline");
+    expect(document.activeElement).toBe(box());
+    expect(box().selectionStart).toBe(5);
+  });
+
+  it("does not steal focus when the user moved to another control during the send", async () => {
+    let release!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    render(<><button>other</button><MessageComposer onSend={onSend} /></>);
+    box().focus();
+    fireEvent.change(box(), { target: { value: "Hi" } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+    screen.getByText("other").focus();
+    await act(async () => { release(); await Promise.resolve(); });
+    expect(document.activeElement).toBe(screen.getByText("other"));
+  });
+
+  it("does not focus the old composer after switching conversations or when disabled", async () => {
+    let release!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const { rerender } = render(<MessageComposer key="a" onSend={onSend} />);
+    box().focus();
+    fireEvent.change(box(), { target: { value: "Hi" } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+    rerender(<MessageComposer key="b" onSend={vi.fn()} />);
+    await act(async () => { release(); await Promise.resolve(); });
+    expect(document.activeElement).not.toBe(box());
+
+    cleanup();
+    const { rerender: again } = render(<MessageComposer onSend={onSend} />);
+    box().focus();
+    fireEvent.change(box(), { target: { value: "Hi" } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+    again(<MessageComposer onSend={onSend} disabled />);
+    const focusSpy = vi.spyOn(HTMLTextAreaElement.prototype, "focus");
+    await act(async () => { release(); await Promise.resolve(); });
+    expect(box().disabled).toBe(true);
+    expect(focusSpy).not.toHaveBeenCalled();
+    focusSpy.mockRestore();
+  });
+
+  it("mention selection with Enter still selects without sending, then Enter sends and refocuses", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(<MessageComposer onSend={onSend} mentionMembers={[{ userId: "@alex:x", name: "Alex Smith" }]} />);
+    box().focus();
+    fireEvent.change(box(), { target: { value: "@ale" } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box().value).toBe("@Alex Smith ");
+    fireEvent.keyDown(box(), { key: "Enter" });
+    await flush();
+    expect(onSend.mock.calls[0][2]).toEqual([{ userId: "@alex:x", label: "@Alex Smith", start: 0, end: 11 }]);
+    expect(document.activeElement).toBe(box());
+  });
+});

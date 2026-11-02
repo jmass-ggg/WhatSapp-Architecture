@@ -100,6 +100,8 @@ export function MessageComposer({
   const emojiAnchorRef = useRef<HTMLDivElement>(null);
   const pendingEmojiSelection = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Set when a send started from the composer; consumed once the textarea is enabled again.
+  const restoreFocus = useRef<"start" | "end" | null>(null);
   const isBusy = busy || sending || voiceOpen;
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -121,6 +123,24 @@ export function MessageComposer({
     input.setSelectionRange(selection, selection);
     pendingEmojiSelection.current = null;
   }, [value]);
+
+  // Restore focus only after the textarea is re-enabled (a disabled element cannot take focus),
+  // and never when the user moved focus elsewhere while the send was pending.
+  useLayoutEffect(() => {
+    const mode = restoreFocus.current;
+    if (!mode) return;
+    if (disabled) { restoreFocus.current = null; return; }
+    if (isBusy) return;
+    restoreFocus.current = null;
+    const input = textareaRef.current;
+    if (!input || input.disabled || input.readOnly) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== input) return;
+    input.focus({ preventScroll: true });
+    const caretAt = mode === "start" ? 0 : input.value.length;
+    input.setSelectionRange(caretAt, caretAt);
+    setCaret(caretAt);
+  }, [isBusy, disabled]);
 
   useEffect(() => {
     if (!file || !file.type.startsWith("image/")) { setFilePreview(null); return; }
@@ -178,6 +198,8 @@ export function MessageComposer({
       (file !== undefined && attachmentsDisabled)
     ) return;
     setError("");
+    const active = document.activeElement;
+    const hadFocus = !active || active === document.body || active === textareaRef.current || Boolean(active.closest(".message-composer"));
     setSending(true);
     try {
       if (sendMentions.length) await onSend(text, file, sendMentions);
@@ -189,12 +211,14 @@ export function MessageComposer({
       setFile(undefined);
       if (fileRef.current) fileRef.current.value = "";
       if (textareaRef.current) textareaRef.current.style.height = "auto";
+      if (hadFocus) restoreFocus.current = "start";
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
           : "Your message could not be sent. Try again.",
       );
+      if (hadFocus) restoreFocus.current = "end";
     } finally {
       setSending(false);
     }
