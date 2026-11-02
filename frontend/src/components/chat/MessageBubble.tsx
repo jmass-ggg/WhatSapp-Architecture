@@ -17,6 +17,7 @@ interface MessageBubbleProps {
   matrixSession: MatrixSession | null;
   ownAvatar?: { name: string; avatarUrl?: string | null };
   onReply?: (message: Message) => void;
+  onRetry?: (message: Message) => void;
   onMentionClick?: (userId: string) => void;
   onJump?: (eventId: string) => void;
   isPinned?: boolean;
@@ -47,9 +48,21 @@ function initialsOf(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?";
 }
 
-function Receipt({ delivery }: { delivery: Message["delivery"] }) {
+function Receipt({ delivery, onRetry }: { delivery: Message["delivery"]; onRetry?: () => void }) {
   if (delivery === "sending") return <Clock3 size={13} aria-label="Sending" />;
-  if (delivery === "failed") return <span className="message-failed">Not sent</span>;
+  if (delivery === "failed") {
+    return (
+      <span className="message-failed">
+        Not sent
+        {onRetry && (
+          <>
+            {" · "}
+            <button type="button" className="message-retry" onClick={onRetry}>Retry</button>
+          </>
+        )}
+      </span>
+    );
+  }
   if (delivery === "cancelled") return <span className="message-failed">Cancelled</span>;
   return delivery === "read" ? (
     <CheckCheck size={14} className="receipt-read" aria-label="Read" />
@@ -64,6 +77,7 @@ export function MessageBubble({
   matrixSession,
   ownAvatar,
   onReply,
+  onRetry,
   onMentionClick,
   onJump,
   isPinned = false,
@@ -228,7 +242,7 @@ export function MessageBubble({
             >
               {formatMessageTime(message.sentAt)}
             </time>
-            {outgoing && <Receipt delivery={delivery} />}
+            {outgoing && <Receipt delivery={delivery} onRetry={onRetry ? () => onRetry(message) : undefined} />}
             {outgoing && !conversation.isGroup && message.delivery === "read" && message.readAt && (
               <time dateTime={message.readAt.toISOString()} aria-label={`Seen at ${formatMessageTime(message.readAt)}`}>
                 Seen at {formatMessageTime(message.readAt)}

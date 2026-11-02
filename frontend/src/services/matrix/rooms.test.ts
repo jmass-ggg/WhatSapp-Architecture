@@ -2,7 +2,7 @@ import { EventStatus, MatrixEvent, ReceiptType, type Room } from "matrix-js-sdk"
 import { describe, expect, it, vi } from "vitest";
 
 import { MATRIX_DIRECT_MARKER_TYPE, MATRIX_GROUP_MARKER_TYPE } from "./messaging";
-import { conversationFromMatrixRoom, conversationsFromMatrixClient, legacyEncryptedRoomIds, findDirectRoomId } from "./rooms";
+import { ConversationCache, conversationFromMatrixRoom, conversationsFromMatrixClient, legacyEncryptedRoomIds, findDirectRoomId } from "./rooms";
 
 describe("Matrix room mapping", () => {
   it("uses only a real recipient public receipt at a known timeline position", () => {
@@ -436,5 +436,27 @@ describe("stripped group invitations", () => {
   it("keeps direct invites (is_direct) as direct chats", () => {
     const [c] = conversationsFromMatrixClient([inviteRoom("", true)], "@self:localhost");
     expect(c.isGroup).toBe(false);
+  });
+});
+
+describe("ConversationCache", () => {
+  const mk = (roomId: string, name: string) => ({
+    roomId, name, getMembers: () => [],
+    getLiveTimeline: () => ({ getEvents: () => [] }),
+    getMyMembership: () => "join", hasEncryptionStateEvent: () => false,
+    currentState: { getStateEvents: () => null },
+    getUnreadNotificationCount: () => 0, getLastActiveTimestamp: () => 0,
+    guessDMUserId: () => "@other:localhost",
+  } as unknown as Room);
+
+  it("rebuilds only dirty rooms and reuses unchanged conversation objects", () => {
+    const rooms = [mk("!a:l", "A"), mk("!b:l", "B")];
+    const cache = new ConversationCache();
+    const first = conversationsFromMatrixClient(rooms, "@self:localhost", cache);
+    cache.markRoom("!a:l");
+    const second = conversationsFromMatrixClient(rooms, "@self:localhost", cache);
+    const byId = (list: typeof first, id: string) => list.find((c) => c.roomId === id);
+    expect(byId(second, "!b:l")).toBe(byId(first, "!b:l"));
+    expect(byId(second, "!a:l")).not.toBe(byId(first, "!a:l"));
   });
 });

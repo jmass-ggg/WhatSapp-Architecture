@@ -9,6 +9,8 @@ import {
   isLegacyEncryptedRoom,
   MATRIX_DIRECT_MARKER_TYPE,
   MATRIX_GROUP_MARKER_TYPE,
+  queueTextMessage,
+  retryFailedMessage,
   sendTextMessage,
 } from "./messaging";
 
@@ -187,5 +189,50 @@ describe("isLegacyEncryptedRoom", () => {
     expect(
       isLegacyEncryptedRoom({ currentState: { getStateEvents: () => ({}) } }),
     ).toBe(true);
+  });
+});
+
+describe("queueTextMessage (local acceptance vs acknowledgment)", () => {
+  it("submits ten messages in order synchronously without awaiting any acknowledgment", () => {
+    const { client, sendMessage } = mockClient();
+    sendMessage.mockImplementation(() => new Promise(() => {}) as never);
+    for (let i = 0; i < 10; i++) queueTextMessage(client, roomId, `m${i}`);
+    expect(sendMessage).toHaveBeenCalledTimes(10);
+    expect((sendMessage.mock.calls as unknown as [string, { body: string }][]).map((c) => c[1].body))
+      .toEqual(Array.from({ length: 10 }, (_, i) => `m${i}`));
+  });
+
+  it("keeps per-message reply context and rejects before submission when not permitted", () => {
+    const { client, sendMessage } = mockClient();
+    queueTextMessage(client, roomId, "a", "$one:localhost");
+    queueTextMessage(client, roomId, "b");
+    const calls = sendMessage.mock.calls as unknown as [string, Record<string, unknown>][];
+    expect(calls[0][1]["m.relates_to"]).toBeDefined();
+    expect(calls[1][1]["m.relates_to"]).toBeUndefined();
+    const blocked = mockClient({ canSend: false });
+    expect(() => queueTextMessage(blocked.client, roomId, "x")).toThrow(/permission/);
+    expect(blocked.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not raise an unhandled rejection when the server fails the send", async () => {
+    const { client, sendMessage } = mockClient();
+    sendMessage.mockRejectedValue(new Error("rate limited") as never);
+    const { acknowledged } = queueTextMessage(client, roomId, "hi");
+    await expect(acknowledged).rejects.toThrow("rate limited");
+  });
+});
+
+describe("retryFailedMessage", () => {
+  it("resends the original pending event instead of creating a new one", async () => {
+    const { client, sendMessage } = mockClient();
+    const event = { getId: () => "~txn1" };
+    const room = client.getRoom(roomId) as unknown as Record<string, unknown>;
+    room.getPendingEvents = () => [event];
+    const resendEvent = vi.fn(async () => "$id");
+    (client as unknown as Record<string, unknown>).resendEvent = resendEvent;
+    await retryFailedMessage(client, roomId, "~txn1");
+    expect(resendEvent).toHaveBeenCalledWith(event, room);
+    expect(sendMessage).not.toHaveBeenCalled();
+    await expect(retryFailedMessage(client, roomId, "~gone")).rejects.toThrow(/no longer/);
   });
 });

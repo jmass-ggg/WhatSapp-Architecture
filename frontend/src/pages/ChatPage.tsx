@@ -31,6 +31,8 @@ import {
   assertSendReady,
   declineGroupInvitation,
   sendTextMessage,
+  queueTextMessage,
+  retryFailedMessage,
 } from "../services/matrix/messaging";
 import { roomMembers, roomTopic } from "../services/matrix/members";
 import type { MentionEntity } from "../services/matrix/mentions";
@@ -39,6 +41,8 @@ import { hasOlderHistory, loadOlderMessages } from "../services/matrix/history";
 import { loadMatrixMessage } from "../services/matrix/messageNavigation";
 import { canManagePinnedMessages, getPinnedEventIds, updatePinnedEvent } from "../services/matrix/pinning";
 import type { Conversation, Message, UserConnection } from "../types";
+
+const CONNECTION_VERIFY_TTL_MS = 15_000;
 
 type ToastState = { message: string; kind: "success" | "error" | "info" };
 
@@ -408,13 +412,22 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
     }
   }, [basePath, client, navigate, notify, selectedConversation, selectedId]);
 
+  const verifiedConnections = useRef(new Map<string, number>());
+  useEffect(() => { verifiedConnections.current.clear(); }, [client]);
+
   const prepareSend = useCallback(async () => {
     if (!selectedConversation || !client) throw new Error("Select a conversation first.");
     if (!selectedConversation.isGroup) {
       if (!selectedConversation.connectionAllowed || !selectedConversation.connectionUserId) {
         throw new Error("Accept a connection request before sending a direct message.");
       }
-      await contacts.verifyAccepted(selectedConversation.connectionUserId);
+      // A successful server check stays valid briefly so rapid sends don't each wait on a round trip.
+      const connectionUserId = selectedConversation.connectionUserId;
+      const verifiedAt = verifiedConnections.current.get(connectionUserId);
+      if (verifiedAt === undefined || Date.now() - verifiedAt > CONNECTION_VERIFY_TTL_MS) {
+        await contacts.verifyAccepted(connectionUserId);
+        verifiedConnections.current.set(connectionUserId, Date.now());
+      }
       if (!canSend) throw new Error("Both users must join the room before messaging.");
     }
     return { client, roomId: selectedConversation.roomId ?? selectedConversation.id, replyEventId: replyTo?.matrix?.eventId };
@@ -433,11 +446,25 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
           throw error;
         }
       } else {
-        await sendTextMessage(client, roomId, text, replyEventId, mentions);
+        // Locally accepted once queueTextMessage returns (SDK local echo); acknowledgment is async.
+        const { acknowledged } = queueTextMessage(client, roomId, text, replyEventId, mentions);
+        void acknowledged.catch((cause) =>
+          notify(errorMessage(cause, "A message could not be sent. Use Retry on the message."), "error"));
       }
-      setReplyTo(null);
+      // Only clear the reply this send used, never a newer one chosen meanwhile.
+      setReplyTo((current) => (current?.matrix?.eventId === replyEventId ? null : current));
     },
-    [prepareSend],
+    [notify, prepareSend],
+  );
+
+  const retryMessage = useCallback(
+    (message: Message) => {
+      const roomId = selectedConversation?.roomId ?? selectedConversation?.id;
+      if (!client || !roomId || !message.matrix?.eventId) return;
+      retryFailedMessage(client, roomId, message.matrix.eventId).catch((cause) =>
+        notify(errorMessage(cause, "Retry failed."), "error"));
+    },
+    [client, notify, selectedConversation],
   );
 
   const sendVoice = useCallback(
@@ -654,6 +681,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
             searchOpen={searchOpen}
             conversationRouteId={conversationId}
             onReply={setReplyTo}
+            onRetry={retryMessage}
             onMentionClick={openMention}
             starredEventIds={starredEventIds}
             onToggleStar={(eventId) => void toggleStar(eventId)}

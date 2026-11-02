@@ -125,13 +125,25 @@ export function assertSendReady(client: MatrixClient, roomId: string, replyEvent
   }
 }
 
-export async function sendTextMessage(
+export interface QueuedTextMessage {
+  /** Resolves on Synapse acknowledgment; rejects if the SDK gives up (event stays NOT_SENT for retry). */
+  acknowledged: Promise<ISendEventResponse>;
+}
+
+/**
+ * Acceptance boundary: everything before `client.sendMessage` runs synchronously and may throw
+ * (draft must be preserved). `sendMessage` adds the SDK local echo (pending event, status
+ * QUEUED/SENDING) synchronously, so once this function returns the message is locally accepted
+ * and the composer may reset. Remote acknowledgment is tracked via `acknowledged` and the SDK's
+ * LocalEchoUpdated events; ordering is guaranteed by the SDK's per-room send queue.
+ */
+export function queueTextMessage(
   client: MatrixClient,
   roomId: string,
   text: string,
   replyEventId?: string,
   mentions: MentionEntity[] = [],
-): Promise<ISendEventResponse> {
+): QueuedTextMessage {
   const body = text.trim();
   if (!body) throw new Error("Message is empty.");
   assertSendReady(client, roomId, replyEventId);
@@ -144,9 +156,35 @@ export async function sendTextMessage(
     (userId) => room?.getMember?.(userId)?.membership === "join",
     client.getUserId() ?? undefined,
   );
-  return client.sendMessage(roomId, {
+  const acknowledged = client.sendMessage(roomId, {
     msgtype: MsgType.Text,
     ...content,
     ...(replyEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyEventId } } } : {}),
   });
+  // Failures surface through the timeline (NOT_SENT + Retry); never an unhandled rejection.
+  acknowledged.catch(() => {});
+  return { acknowledged };
+}
+
+export function sendTextMessage(
+  client: MatrixClient,
+  roomId: string,
+  text: string,
+  replyEventId?: string,
+  mentions: MentionEntity[] = [],
+): Promise<ISendEventResponse> {
+  try {
+    return queueTextMessage(client, roomId, text, replyEventId, mentions).acknowledged;
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+/** Retries the original failed event through the SDK, reusing its transaction ID. */
+export async function retryFailedMessage(client: MatrixClient, roomId: string, eventId: string): Promise<void> {
+  const room = client.getRoom(roomId);
+  const event = room?.getPendingEvents().find((candidate) => candidate.getId() === eventId);
+  if (!room || !event) throw new Error("This message can no longer be retried.");
+  if (room.getMyMembership() !== "join") throw new Error("Join the room before sending a message.");
+  await client.resendEvent(event, room);
 }

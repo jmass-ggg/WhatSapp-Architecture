@@ -22,6 +22,7 @@ interface MessageListProps {
   searchOpen: boolean;
   conversationRouteId?: string;
   onReply?: (message: Message) => void;
+  onRetry?: (message: Message) => void;
   onMentionClick?: (userId: string) => void;
   pinnedEventIds?: ReadonlySet<string>;
   canManagePins?: boolean;
@@ -83,6 +84,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   searchOpen,
   conversationRouteId,
   onReply,
+  onRetry,
   onMentionClick,
   pinnedEventIds = EMPTY_PINNED_IDS,
   canManagePins = false,
@@ -96,15 +98,47 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
   const [focusedEventId, setFocusedEventId] = useState<string | null>(null);
   const term = searchTerm.trim().toLowerCase();
-  const scrollToLatest = useCallback(() => {
-    const scroller = scrollRef.current;
-    if (!scroller || searchOpen) return;
-    if (typeof scroller.scrollTo === "function") {
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-    } else {
-      scroller.scrollTop = scroller.scrollHeight;
-    }
+  const stickToBottom = useRef(true);
+  const scrollFrame = useRef<number | null>(null);
+  const lastBurstAt = useRef(0);
+  const [unreadBelow, setUnreadBelow] = useState(0);
+  const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  /** At most one scroll per animation frame; instant during bursts or reduced motion. */
+  const scrollToLatest = useCallback((force = false) => {
+    if (searchOpen) return;
+    if (!force && !stickToBottom.current) return;
+    if (scrollFrame.current !== null) return;
+    const run = () => {
+      scrollFrame.current = null;
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const burst = performance.now() - lastBurstAt.current < 400;
+      if (typeof scroller.scrollTo === "function") {
+        scroller.scrollTo({
+          top: scroller.scrollHeight,
+          behavior: burst || reducedMotion() ? "auto" : "smooth",
+        });
+      } else {
+        scroller.scrollTop = scroller.scrollHeight;
+      }
+      stickToBottom.current = true;
+      setUnreadBelow(0);
+    };
+    if (typeof requestAnimationFrame === "function") scrollFrame.current = requestAnimationFrame(run);
+    else run();
   }, [searchOpen]);
+  useEffect(() => () => {
+    if (scrollFrame.current !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(scrollFrame.current);
+    }
+  }, []);
+  const handleScroll = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const near = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    stickToBottom.current = near;
+    if (near) setUnreadBelow(0);
+  }, []);
   const messages = useMemo(() => {
     const combined = new Map<string, Message>();
     const currentContextMessages = contextMessages.filter(
@@ -132,14 +166,22 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     setContextMessages([]);
     setPendingJumpId(null);
     setFocusedEventId(null);
-    scrollToLatest();
+    setUnreadBelow(0);
+    stickToBottom.current = true;
+    scrollToLatest(true);
   }, [conversation?.id, conversationRouteId]);
 
   useEffect(() => {
-    const lastMessageId = conversation?.messages.at(-1)?.id;
+    const lastMessage = conversation?.messages.at(-1);
+    const lastMessageId = lastMessage?.id;
     if (lastMessageId && previousLastMessageId.current &&
       lastMessageId !== previousLastMessageId.current) {
-      scrollToLatest();
+      const now = performance.now();
+      lastBurstAt.current = now;
+      // Own sends always follow; others only when the reader is at the bottom.
+      if (lastMessage?.sender === "me") scrollToLatest(true);
+      else if (stickToBottom.current) scrollToLatest();
+      else setUnreadBelow((count) => count + 1);
     }
     previousLastMessageId.current = lastMessageId;
   }, [conversation?.messages, scrollToLatest]);
@@ -214,8 +256,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       aria-relevant="additions text"
       key={conversation.id}
       ref={scrollRef}
+      onScroll={handleScroll}
       onLoadCapture={(event) => {
-        if (event.target instanceof HTMLImageElement) scrollToLatest();
+        if (event.target instanceof HTMLImageElement || event.target instanceof HTMLMediaElement) scrollToLatest();
       }}
     >
       {searchOpen && term && (
@@ -241,6 +284,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 isStarred={Boolean(message.matrix?.eventId && starredEventIds?.has(message.matrix.eventId))}
                 onToggleStar={onToggleStar}
                 onReply={onReply}
+                onRetry={onRetry}
                 onMentionClick={onMentionClick}
                 isPinned={Boolean(message.matrix?.eventId && pinnedEventIds.has(message.matrix.eventId))}
                 canManagePins={canManagePins}
@@ -261,6 +305,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               : `${conversation.name} is typing…`}
           </span>
         </div>
+      )}
+      {unreadBelow > 0 && (
+        <button type="button" className="new-messages-pill" onClick={() => scrollToLatest(true)}>
+          {unreadBelow === 1 ? "New message" : `${unreadBelow} new messages`} ↓
+        </button>
       )}
     </div>
   );

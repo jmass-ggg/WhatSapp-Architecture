@@ -255,16 +255,54 @@ export function collapseDuplicateDirects(conversations: Conversation[]): Convers
   );
 }
 
+/** Per-room conversation cache so unchanged rooms keep a stable object identity. */
+export class ConversationCache {
+  readonly byRoom = new Map<string, Conversation>();
+  private dirty = new Set<string>();
+  private all = true;
+  markRoom(roomId: string | null | undefined): void {
+    if (roomId) this.dirty.add(roomId);
+    else this.all = true;
+  }
+  markAll(): void {
+    this.all = true;
+  }
+  consume(): { all: boolean; dirty: Set<string> } {
+    const state = { all: this.all, dirty: this.dirty };
+    this.all = false;
+    this.dirty = new Set();
+    return state;
+  }
+}
+
 export function conversationsFromMatrixClient(
   rooms: Room[],
   ownUserId: string,
+  cache?: ConversationCache,
 ): Conversation[] {
-  const conversations = rooms
+  const visible = rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
-    .filter((room) => !isLegacyEncryptedRoom(room))
-    .map((room) => conversationFromMatrixRoom(room, ownUserId))
-    .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
-  return collapseDuplicateDirects(conversations);
+    .filter((room) => !isLegacyEncryptedRoom(room));
+  let conversations: Conversation[];
+  if (cache) {
+    const { all, dirty } = cache.consume();
+    const live = new Set<string>();
+    conversations = visible.map((room) => {
+      live.add(room.roomId);
+      let conversation = cache.byRoom.get(room.roomId);
+      if (all || dirty.has(room.roomId) || !conversation) {
+        conversation = conversationFromMatrixRoom(room, ownUserId);
+        cache.byRoom.set(room.roomId, conversation);
+      }
+      return conversation;
+    });
+    for (const id of [...cache.byRoom.keys()]) if (!live.has(id)) cache.byRoom.delete(id);
+  } else {
+    conversations = visible.map((room) => conversationFromMatrixRoom(room, ownUserId));
+  }
+  return collapseDuplicateDirects(
+    [...conversations].sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()),
+  );
 }
 
 /** Existing joined or invited plaintext direct room with this peer, if any. */

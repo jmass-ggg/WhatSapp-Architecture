@@ -9,7 +9,7 @@ import {
   verifyMatrixClientIdentity,
 } from "./client";
 import { PresenceTracker } from "./presence";
-import { conversationsFromMatrixClient, legacyEncryptedRoomIds } from "./rooms";
+import { ConversationCache, conversationsFromMatrixClient, legacyEncryptedRoomIds } from "./rooms";
 
 export type MatrixConnectionStatus =
   | "disabled"
@@ -55,6 +55,17 @@ type SnapshotListener = () => void;
 
 const SYNC_RETRY_MESSAGE = "Matrix sync is interrupted. The SDK is retrying automatically.";
 
+function roomIdOf(args: unknown[]): string | undefined {
+  for (const arg of args) {
+    if (!arg || typeof arg !== "object") continue;
+    const candidate = arg as { roomId?: unknown; getRoomId?: () => unknown };
+    if (typeof candidate.roomId === "string") return candidate.roomId;
+    const id = typeof candidate.getRoomId === "function" ? candidate.getRoomId() : undefined;
+    if (typeof id === "string") return id;
+  }
+  return undefined;
+}
+
 export class MatrixClientSession {
   private clientInstance: MatrixClient | null = null;
   private sdk: typeof import("matrix-js-sdk") | null = null;
@@ -65,6 +76,7 @@ export class MatrixClientSession {
   private disposed = false;
   private authFailure = false;
   private refreshQueued = false;
+  private readonly conversationCache = new ConversationCache();
   private readonly factory?: MatrixClientFactory;
 
   private snapshot: MatrixConnectionSnapshot = {
@@ -145,16 +157,19 @@ export class MatrixClientSession {
     });
   };
 
-  private readonly onClientRoom = (_room: Room) => this.scheduleRoomRefresh();
-  private readonly onDeleteRoom = (_roomId: string) => this.scheduleRoomRefresh();
+  private readonly onClientRoom = (room: Room) => this.scheduleRoomRefresh(room.roomId);
+  private readonly onDeleteRoom = (roomId: string) => this.scheduleRoomRefresh(roomId);
   private readonly onTimeline = (event: MatrixEvent) => {
     this.recordEvent(event);
-    this.scheduleRoomRefresh();
+    this.scheduleRoomRefresh(event.getRoomId());
   };
-  private readonly onRoomUpdate = () => this.scheduleRoomRefresh();
+  /** Room, member, state and event payloads all identify their room; unknown payloads refresh everything. */
+  private readonly onRoomUpdate = (...args: unknown[]) => {
+    this.scheduleRoomRefresh(roomIdOf(args));
+  };
   private readonly onLiveEvent = (event: MatrixEvent) => {
     this.recordEvent(event);
-    this.scheduleRoomRefresh();
+    this.scheduleRoomRefresh(event.getRoomId());
   };
 
   constructor(
@@ -352,11 +367,15 @@ export class MatrixClientSession {
       if (!oldest) break;
       this.seenEventIds.delete(oldest);
     }
-    this.publish({ recentEvents });
+    // A room refresh is always queued for this event once synced, so avoid a second publish.
+    if (this.snapshot.initialSyncComplete) this.snapshot = { ...this.snapshot, recentEvents };
+    else this.publish({ recentEvents });
   }
 
-  private scheduleRoomRefresh(): void {
-    if (this.disposed || !this.snapshot.initialSyncComplete || this.refreshQueued) return;
+  private scheduleRoomRefresh(roomId?: string | null): void {
+    if (this.disposed || !this.snapshot.initialSyncComplete) return;
+    this.conversationCache.markRoom(roomId);
+    if (this.refreshQueued) return;
     this.refreshQueued = true;
     queueMicrotask(() => {
       this.refreshQueued = false;
@@ -383,7 +402,7 @@ export class MatrixClientSession {
     if (!client || !userId) return { rooms: [], legacyRoomIds: [] };
     const rooms = client.getRooms();
     return {
-      rooms: conversationsFromMatrixClient(rooms, userId),
+      rooms: conversationsFromMatrixClient(rooms, userId, this.conversationCache),
       legacyRoomIds: legacyEncryptedRoomIds(rooms),
     };
   }

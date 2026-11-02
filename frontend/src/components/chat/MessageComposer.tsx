@@ -200,10 +200,7 @@ export function MessageComposer({
     setError("");
     const active = document.activeElement;
     const hadFocus = !active || active === document.body || active === textareaRef.current || Boolean(active.closest(".message-composer"));
-    setSending(true);
-    try {
-      if (sendMentions.length) await onSend(text, file, sendMentions);
-      else await onSend(text, file);
+    const resetDraft = () => {
       stopTyping();
       setValue("");
       setMentions([]);
@@ -212,6 +209,28 @@ export function MessageComposer({
       if (fileRef.current) fileRef.current.value = "";
       if (textareaRef.current) textareaRef.current.style.height = "auto";
       if (hadFocus) restoreFocus.current = "start";
+    };
+    const sendSnapshot = () => (sendMentions.length ? onSend(text, file, sendMentions) : onSend(text, file));
+    if (!file) {
+      // Text: snapshot taken above; reset now so the next message can be typed immediately.
+      // onSend resolves at local acceptance (SDK local echo), not server acknowledgment.
+      const draft = { value, mentions };
+      resetDraft();
+      try {
+        await sendSnapshot();
+      } catch (cause) {
+        // Local submission failed: restore the draft unless the user already started a new one.
+        setValue((current) => (current === "" ? draft.value : current));
+        setMentions((current) => (current.length === 0 ? draft.mentions : current));
+        setError(cause instanceof Error ? cause.message : "Your message could not be sent. Try again.");
+        if (hadFocus) restoreFocus.current = "end";
+      }
+      return;
+    }
+    setSending(true);
+    try {
+      await sendSnapshot();
+      resetDraft();
     } catch (cause) {
       setError(
         cause instanceof Error

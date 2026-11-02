@@ -243,17 +243,29 @@ describe("MessageComposer focus after send", () => {
     expect(onSend).toHaveBeenCalledTimes(2);
   });
 
-  it("clicking Send restores focus and focuses only after re-enable", async () => {
-    let release!: () => void;
-    const onSend = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+  it("keeps the composer enabled and clears it while a text send is pending", async () => {
+    const onSend = vi.fn(() => new Promise<void>(() => {}));
     render(<MessageComposer onSend={onSend} />);
+    box().focus();
     fireEvent.change(box(), { target: { value: "Hi" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(box().disabled).toBe(true);
-    expect(document.activeElement).not.toBe(box());
-    await act(async () => { release(); await Promise.resolve(); });
+    await flush();
     expect(box().disabled).toBe(false);
+    expect(box().value).toBe("");
     expect(document.activeElement).toBe(box());
+  });
+
+  it("sends ten rapid messages without waiting for any acknowledgment", async () => {
+    const onSend = vi.fn(() => new Promise<void>(() => {}));
+    render(<MessageComposer onSend={onSend} />);
+    box().focus();
+    for (let i = 0; i < 10; i++) {
+      fireEvent.change(box(), { target: { value: `m${i}` } });
+      fireEvent.keyDown(box(), { key: "Enter" });
+      await flush();
+    }
+    expect(onSend.mock.calls.map((call) => (call as unknown as [string])[0]))
+      .toEqual(Array.from({ length: 10 }, (_, i) => `m${i}`));
   });
 
   it("keeps the draft and returns focus when a send fails", async () => {
