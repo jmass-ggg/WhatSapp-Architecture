@@ -209,7 +209,11 @@ describe("Matrix presence integration", () => {
     await waitFor(() => expect(manager.getSnapshot().presence[peer]).toBe("online"));
 
     client.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Prepared);
-    expect(client.getPresence).toHaveBeenCalledTimes(1);
+    // One read for the peer and one for the signed-in user (own status), never repeated per sync.
+    expect(client.getPresence).toHaveBeenCalledTimes(2);
+    expect(client.getPresence).toHaveBeenCalledWith(peer);
+    expect(client.getPresence).toHaveBeenCalledWith(userA);
+    expect(manager.getSnapshot().presence[userA]).toBe("online");
 
     client.emit(UserEvent.Presence, undefined, { userId: peer, presence: "offline" });
     expect(manager.getSnapshot().presence[peer]).toBe("offline");
@@ -227,7 +231,7 @@ describe("Matrix presence integration", () => {
     client.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
     expect(manager.getSnapshot().presence).toEqual({});
     client.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Reconnecting);
-    await waitFor(() => expect(client.getPresence).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(client.getPresence).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(manager.getSnapshot().presence[peer]).toBe("online"));
     manager.dispose();
   });
@@ -251,7 +255,9 @@ describe("Matrix presence integration", () => {
     await waitForStart(client);
     expect(client.listenerCount(UserEvent.Presence)).toBe(1);
     client.emit(ClientEvent.Sync, SyncState.Prepared, null);
-    expect(client.getPresence).not.toHaveBeenCalled();
+    expect(client.getPresence).not.toHaveBeenCalledWith(peer);
+    expect(client.getPresence).toHaveBeenCalledTimes(1);
+    expect(client.getPresence).toHaveBeenCalledWith(userA);
 
     manager.dispose();
     expect(client.listenerCount(UserEvent.Presence)).toBe(0);

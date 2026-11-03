@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchMatrixMedia } from "../services/matrix/media";
+import { presenceLabel } from "../services/matrix/presence";
 import type { PresenceState } from "../types";
 
 interface UserAvatarProps {
@@ -85,10 +86,13 @@ export function UserAvatar({
       ) : (
         <span aria-hidden="true">{initials}</span>
       )}
-      {presence === "online" && (
-        <span className="avatar-presence is-online" role="img" aria-label="Online" />
+      {presenceLabel(presence) && (
+        <span
+          className={`avatar-presence ${presence === "online" ? "is-online" : presence === "unavailable" ? "is-away" : "is-offline"}`}
+          role="img"
+          aria-label={presenceLabel(presence)}
+        />
       )}
-      {presence === "offline" && <span className="sr-only">Offline</span>}
     </span>
   );
 }

@@ -27,10 +27,19 @@ it("shows Online text and a green dot for an online direct contact", () => {
   expect(screen.getByRole("img", { name: "Online" })).toBeTruthy();
 });
 
-it.each(["unknown", "unavailable", "offline"] as const)("shows no dot or online text when presence is %s", (presence) => {
+it.each([["unavailable", "Away"], ["offline", "Offline"]] as const)("shows %s as %s text with a matching dot, never Online", (presence, label) => {
   render(<ChatHeader conversation={{ ...conversation, isTyping: false, presence }} matrixSession={null} onBack={vi.fn()} />);
+  expect(screen.getByText(label).className).toBe("presence-text");
+  expect(screen.getByRole("img", { name: label })).toBeTruthy();
   expect(screen.queryByText("Online")).toBeNull();
-  expect(screen.queryByRole("img", { name: "Online" })).toBeNull();
+  expect(screen.queryByText("@alice")).toBeNull();
+});
+
+it.each(["unknown", undefined] as const)("falls back to the handle with no dot when presence is %s", (presence) => {
+  render(<ChatHeader conversation={{ ...conversation, isTyping: false, presence }} matrixSession={null} onBack={vi.fn()} />);
+  expect(screen.getByText("@alice")).toBeTruthy();
+  expect(screen.queryByRole("img", { name: /Online|Away|Offline/ })).toBeNull();
+  expect(screen.queryByText(/Online|Away|Offline/)).toBeNull();
 });
 
 it("never shows a single-user online dot for a group", () => {

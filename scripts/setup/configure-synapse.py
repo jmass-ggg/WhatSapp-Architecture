@@ -30,6 +30,14 @@ config["jwt_config"] = {
     "issuer": os.environ["SYNAPSE_JWT_ISSUER"],
     "audiences": [os.environ["SYNAPSE_JWT_AUDIENCE"]],
 }
+# One backend service identity creates every community room, so allow a modest burst.
+config["rc_room_creation"] = {"per_second": 1, "burst_count": 20}
+# The same service identity invites every member, and one person may join many communities.
+config["rc_invites"] = {
+    "per_room": {"per_second": 1, "burst_count": 50},
+    "per_user": {"per_second": 0.5, "burst_count": 30},
+    "per_issuer": {"per_second": 5, "burst_count": 200},
+}
 config["federation_domain_whitelist"] = []
 config["trusted_key_servers"] = []
 config["media_store_path"] = "/data/media_store"

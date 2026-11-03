@@ -232,6 +232,11 @@ button.chat-header-identity:hover h1 { color: var(--blue); }
   font-size: 13px; font-weight: 600; position: relative;
 }
 .info-online-badge::before { content: ""; position: absolute; left: 9px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--online); }
+.info-online-badge.is-away { background: #fff6dc; color: #8a5a00; }
+.info-online-badge.is-away::before { background: #f5b301; }
+.info-online-badge.is-offline { background: #eef2f7; color: #4b5563; }
+.info-online-badge.is-offline::before { background: #94a3b8; }
+.chat-header-person .presence-text { color: var(--muted); }
 .info-details { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; padding: 0; list-style: none; font-size: 14px; }
 .info-details li { display: flex; align-items: center; gap: 10px; color: var(--ink); overflow-wrap: anywhere; }
 .info-details svg { flex: 0 0 auto; color: var(--muted); }

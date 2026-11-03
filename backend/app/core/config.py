@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     synapse_jwt_algorithm: Literal["HS256"] = "HS256"
     synapse_jwt_ttl_seconds: int = Field(default=60, ge=15, le=300)
     synapse_jwt_signing_key: SecretStr
+    # Localpart of the backend-only Matrix identity that provisions channel rooms. Its
+    # access token never leaves the backend process.
+    synapse_channels_service_localpart: str = Field(
+        default="channels_service",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9._=/-]+$",
+    )
 
     app_plan_entitlements: dict[str, list[str]] = Field(
         default_factory=lambda: {

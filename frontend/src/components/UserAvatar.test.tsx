@@ -14,14 +14,18 @@ it("shows an accessible green dot only for online", () => {
   expect(screen.getByRole("img", { name: "Online" }).className).toContain("is-online");
 });
 
-it.each(["unavailable", "unknown", undefined] as const)("shows no dot for %s", (state) => {
-  const { container } = renderAvatar(state);
-  expect(container.querySelector(".avatar-presence")).toBeNull();
-  expect(screen.queryByText("Offline")).toBeNull();
+it("shows an amber Away dot for unavailable (idle)", () => {
+  renderAvatar("unavailable");
+  expect(screen.getByRole("img", { name: "Away" }).className).toContain("is-away");
 });
 
-it("announces offline to assistive tech without a visible dot", () => {
-  const { container } = renderAvatar("offline");
+it("shows a grey Offline dot for offline", () => {
+  renderAvatar("offline");
+  expect(screen.getByRole("img", { name: "Offline" }).className).toContain("is-offline");
+});
+
+it.each(["unknown", undefined] as const)("shows no dot at all for %s: not knowing is not offline", (state) => {
+  const { container } = renderAvatar(state);
   expect(container.querySelector(".avatar-presence")).toBeNull();
-  expect(screen.getByText("Offline").className).toContain("sr-only");
+  expect(screen.queryByRole("img", { name: /Online|Away|Offline/ })).toBeNull();
 });

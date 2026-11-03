@@ -82,7 +82,7 @@ function conversationForContact(connection: UserConnection): Conversation {
 const SECTION_PATHS: Record<NavSection, string> = {
   chats: "/chat",
   groups: "/groups",
-  channels: "/channels",
+  channels: "/communities",
   contacts: "/contacts",
   settings: "/chat",
 };
@@ -592,7 +592,7 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
 
   return (
     <AppLayout>
-      <div className={`chat-app${(section === "chats" || section === "groups") && conversationId && selectedConversation ? " mobile-detail-open" : ""}${infoOpen && selectedConversation ? " has-info-panel" : ""}`}>
+      <div className={`chat-app${section === "channels" ? " is-communities" : ""}${((section === "chats" || section === "groups") && conversationId && selectedConversation) || (section === "channels" && conversationId) ? " mobile-detail-open" : ""}${infoOpen && selectedConversation ? " has-info-panel" : ""}`}>
         <NavigationRail
           active={section}
           currentUser={user}
@@ -617,7 +617,16 @@ export function ChatPage({ section = "chats" }: { section?: NavSection }) {
             onAddContact={() => setDialog("chat")}
           />
         )}
-        {section === "channels" && <ChannelsView />}
+        {section === "channels" && (
+          <ChannelsView
+            api={api}
+            user={user}
+            matrixSession={matrixSession}
+            selectedChannelId={conversationId}
+            onSelectChannel={(channelId) => navigate(channelId ? `/communities/${encodeURIComponent(channelId)}` : "/communities")}
+            onNotify={notify}
+          />
+        )}
         {(section === "chats" || section === "groups") && (<>
         <ConversationSidebar
           mode={section === "groups" ? "groups" : "chats"}

@@ -27,11 +27,99 @@ from tests.http_client import ApiClient
 
 
 class FakeMatrixClient:
+    """In-memory stand-in for Synapse: sessions plus a minimal model of channel rooms."""
+
+    service_user_id = f"@channels_service:{settings.synapse_server_name}"
+
     def __init__(self) -> None:
         self.login_requests: list[tuple[str, str]] = []
         self.logout_tokens: list[str] = []
         self.fail_login = False
         self.fail_logout = False
+        # Channel room model: room_id -> {"members": {mxid: membership}, "users": {mxid: level},
+        # "state": {event_type: content}, "name": str}
+        self.rooms: dict[str, dict] = {}
+        self.service_is_admin = True
+        self.fail_create_room = False
+        self.fail_membership_changes = False
+        self.calls: list[tuple] = []
+
+    # ---- channel rooms -------------------------------------------------------------
+    def create_channel_room(self, *, channel_id, name, topic, category, avatar_url) -> str:
+        if self.fail_create_room:
+            raise MatrixConnectionError("Synapse is unavailable")
+        room_id = f"!channel{len(self.rooms) + 1}:{settings.synapse_server_name}"
+        self.rooms[room_id] = {
+            "members": {self.service_user_id: "join"},
+            "users": {},
+            "name": name,
+            "state": {
+                "m.room.topic": {"topic": topic},
+                "org.recruitable.chat.channel": {"channel_id": channel_id, "category": category},
+                **({"m.room.avatar": {"url": avatar_url}} if avatar_url else {}),
+            },
+        }
+        self.calls.append(("create_room", room_id))
+        return room_id
+
+    def _room(self, room_id: str) -> dict:
+        if room_id not in self.rooms:
+            raise MatrixConnectionError(f"unknown room {room_id}")
+        return self.rooms[room_id]
+
+    def room_membership(self, room_id, user_id):
+        return self._room(room_id)["members"].get(user_id)
+
+    def invite_user(self, room_id, user_id) -> None:
+        if self.fail_membership_changes:
+            raise MatrixConnectionError("Synapse is unavailable")
+        members = self._room(room_id)["members"]
+        if members.get(user_id) not in ("join", "invite"):
+            members[user_id] = "invite"
+        self.calls.append(("invite", room_id, user_id))
+
+    def unban_user(self, room_id, user_id) -> None:
+        self._room(room_id)["members"][user_id] = "leave"
+
+    def kick_user(self, room_id, user_id, reason) -> None:
+        if self.fail_membership_changes:
+            raise MatrixConnectionError("Synapse is unavailable")
+        members = self._room(room_id)["members"]
+        if members.get(user_id) in ("join", "invite"):
+            members[user_id] = "leave"
+        self.calls.append(("kick", room_id, user_id))
+
+    def force_join(self, room_id, user_id) -> bool:
+        if self.fail_membership_changes:
+            raise MatrixConnectionError("Synapse is unavailable")
+        if not self.service_is_admin:
+            return False
+        self._room(room_id)["members"][user_id] = "join"
+        self.calls.append(("join", room_id, user_id))
+        return True
+
+    def joined_members(self, room_id) -> set[str]:
+        return {m for m, state in self._room(room_id)["members"].items() if state == "join"}
+
+    def set_user_power_level(self, room_id, user_id, level) -> None:
+        if self.fail_membership_changes:
+            raise MatrixConnectionError("Synapse is unavailable")
+        users = self._room(room_id)["users"]
+        if level is None:
+            users.pop(user_id, None)
+        else:
+            users[user_id] = level
+
+    def set_room_state(self, room_id, event_type, content) -> None:
+        room = self._room(room_id)
+        if event_type == "m.room.name":
+            room["name"] = content["name"]
+        room["state"][event_type] = content
+
+    def leave_room(self, room_id) -> None:
+        self._room(room_id)["members"][self.service_user_id] = "leave"
+
+    # ---- user sessions -------------------------------------------------------------
 
     def login_with_jwt(
         self,

@@ -9,6 +9,7 @@ import {
   verifyMatrixClientIdentity,
 } from "./client";
 import { PresenceTracker } from "./presence";
+import { channelRoomsFromClient, type ChannelRoomSummary } from "./channels";
 import { ConversationCache, conversationsFromMatrixClient, legacyEncryptedRoomIds } from "./rooms";
 
 export type MatrixConnectionStatus =
@@ -33,6 +34,8 @@ export interface MatrixConnectionSnapshot {
   rooms: Conversation[];
   /** IDs of retired encrypted rooms hidden from the UI (inventory only). */
   legacyRoomIds: string[];
+  /** Channel-type rooms (joined or invited) by room ID; shown only when the backend lists them. */
+  channelRooms: Record<string, ChannelRoomSummary>;
   recentEvents: MatrixEventSummary[];
   /** Matrix presence of direct-chat peers by Matrix user ID. Missing means unknown. */
   presence: Record<string, PresenceState>;
@@ -45,6 +48,7 @@ export const EMPTY_MATRIX_CONNECTION_SNAPSHOT: MatrixConnectionSnapshot = {
   initialSyncComplete: false,
   rooms: [],
   legacyRoomIds: [],
+  channelRooms: {},
   recentEvents: [],
   presence: {},
   error: null,
@@ -77,6 +81,9 @@ export class MatrixClientSession {
   private authFailure = false;
   private refreshQueued = false;
   private readonly conversationCache = new ConversationCache();
+  private readonly channelCache = new ConversationCache<ChannelRoomSummary>();
+  /** Announcement window per channel room, grown by "load older". */
+  private readonly channelWindows = new Map<string, number>();
   private readonly factory?: MatrixClientFactory;
 
   private snapshot: MatrixConnectionSnapshot = {
@@ -372,9 +379,18 @@ export class MatrixClientSession {
     else this.publish({ recentEvents });
   }
 
+  /** Widens the announcement window of a channel room and republishes it. */
+  setChannelWindow(roomId: string, limit: number): void {
+    if (this.disposed) return;
+    this.channelWindows.set(roomId, limit);
+    this.channelCache.markRoom(roomId);
+    if (this.snapshot.initialSyncComplete) this.publish(this.readRooms());
+  }
+
   private scheduleRoomRefresh(roomId?: string | null): void {
     if (this.disposed || !this.snapshot.initialSyncComplete) return;
     this.conversationCache.markRoom(roomId);
+    this.channelCache.markRoom(roomId);
     if (this.refreshQueued) return;
     this.refreshQueued = true;
     // A macrotask (not a microtask) so every room event from one sync response, which the SDK
@@ -388,24 +404,27 @@ export class MatrixClientSession {
     });
   }
 
-  /** Reads initial presence for people we have a direct chat with (once per user). */
+  /** Reads initial presence for ourselves and for people we have a direct chat with (once per user). */
   private trackPeerPresence(): void {
     if (!this.presenceTracker) return;
-    this.presenceTracker.ensure(
-      this.snapshot.rooms
+    const ownUserId = this.clientInstance?.getUserId();
+    this.presenceTracker.ensure([
+      ...(ownUserId ? [ownUserId] : []),
+      ...this.snapshot.rooms
         .filter((room) => !room.isGroup && !room.isInvited && room.matrixUserId)
         .map((room) => room.matrixUserId as string),
-    );
+    ]);
   }
 
-  private readRooms(): Pick<MatrixConnectionSnapshot, "rooms" | "legacyRoomIds"> {
+  private readRooms(): Pick<MatrixConnectionSnapshot, "rooms" | "legacyRoomIds" | "channelRooms"> {
     const client = this.clientInstance;
     const userId = client?.getUserId();
-    if (!client || !userId) return { rooms: [], legacyRoomIds: [] };
+    if (!client || !userId) return { rooms: [], legacyRoomIds: [], channelRooms: {} };
     const rooms = client.getRooms();
     return {
       rooms: conversationsFromMatrixClient(rooms, userId, this.conversationCache),
       legacyRoomIds: legacyEncryptedRoomIds(rooms),
+      channelRooms: channelRoomsFromClient(rooms, userId, this.channelWindows, this.channelCache),
     };
   }
 

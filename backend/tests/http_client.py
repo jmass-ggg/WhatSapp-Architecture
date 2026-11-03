@@ -38,6 +38,9 @@ class ApiClient:
     def put(self, url: str, **kwargs: Any) -> httpx.Response:
         return self._request("PUT", url, **kwargs)
 
+    def delete(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._request("DELETE", url, **kwargs)
+
     def options(self, url: str, **kwargs: Any) -> httpx.Response:
         return self._request("OPTIONS", url, **kwargs)
 

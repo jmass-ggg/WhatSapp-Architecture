@@ -8,6 +8,7 @@ import {
   MATRIX_GROUP_MARKER_TYPE,
 } from "./messaging";
 import { messageFromMatrixEvent } from "./events";
+import { isChannelRoom } from "./channels";
 
 function memberAvatarUrl(member: ReturnType<Room["getMembers"]>[number]): string | null {
   if (member.user?.avatarUrl) return member.user.avatarUrl;
@@ -358,8 +359,8 @@ export function collapseDuplicateDirects(conversations: Conversation[]): Convers
 }
 
 /** Per-room conversation cache so unchanged rooms keep a stable object identity. */
-export class ConversationCache {
-  readonly byRoom = new Map<string, Conversation>();
+export class ConversationCache<T = Conversation> {
+  readonly byRoom = new Map<string, T>();
   private dirty = new Set<string>();
   private all = true;
   markRoom(roomId: string | null | undefined): void {
@@ -382,9 +383,11 @@ export function conversationsFromMatrixClient(
   ownUserId: string,
   cache?: ConversationCache,
 ): Conversation[] {
+  // Channel rooms belong to the Channels section only: never a direct chat, never a group.
   const visible = rooms
     .filter((room) => ["join", "invite"].includes(room.getMyMembership()))
-    .filter((room) => !isLegacyEncryptedRoom(room));
+    .filter((room) => !isLegacyEncryptedRoom(room))
+    .filter((room) => !isChannelRoom(room));
   let conversations: Conversation[];
   if (cache) {
     const { all, dirty } = cache.consume();

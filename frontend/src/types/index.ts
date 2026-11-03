@@ -144,3 +144,85 @@ export interface Conversation {
 }
 
 export type AuthMode = "live";
+
+export type ChannelCategory =
+  | "general"
+  | "announcements"
+  | "engineering"
+  | "technology"
+  | "finance"
+  | "gaming"
+  | "education"
+  | "hr"
+  | "product";
+
+/** owner = creator (full control), admin = publishes and moderates, member = reads and reacts. */
+export type ChannelMemberRole = "owner" | "admin" | "member";
+export type ChannelMemberStatus = "invited" | "joined" | "left" | "removed";
+
+export interface ChannelMembership {
+  role: ChannelMemberRole;
+  status: ChannelMemberStatus;
+  joined_at: string | null;
+}
+
+/** A community (broadcast channel) as registered by the backend, the only source of trusted rooms. */
+export interface Channel {
+  id: string;
+  matrix_room_id: string | null;
+  name: string;
+  description: string;
+  avatar_url: string | null;
+  category: ChannelCategory;
+  creator_id: string | null;
+  is_verified: boolean;
+  status: "provisioning" | "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  /** Members whose Matrix membership is joined, from the backend's reconciled records. */
+  member_count: number;
+  membership: ChannelMembership | null;
+  /** Moderation rights (owner, admin or application admin). */
+  can_manage: boolean;
+  /** Owner-level rights: edit, assign admins, archive. */
+  can_edit: boolean;
+  can_publish: boolean;
+}
+
+export interface ChannelMember {
+  user: { id: string; username: string; profile: UserProfile["profile"] | null };
+  matrix_user_id: string;
+  role: ChannelMemberRole;
+  status: ChannelMemberStatus;
+  joined_at: string | null;
+}
+
+export interface ChannelCreateInput {
+  name: string;
+  description: string;
+  category: ChannelCategory;
+  avatar_url?: string | null;
+  /** Idempotency key: a retry with the same key returns the same community. */
+  request_id?: string;
+}
+
+export interface ChannelUpdateInput {
+  name?: string;
+  description?: string;
+  category?: ChannelCategory;
+  avatar_url?: string | null;
+}
+
+export interface AnnouncementReaction {
+  key: string;
+  count: number;
+  /** The current user reacted with this key; `myEventId` is their reaction event. */
+  mine: boolean;
+  myEventId?: string;
+}
+
+/** One channel announcement: a message with an optional title and aggregated reactions. */
+export interface Announcement extends Message {
+  title?: string;
+  reactions: AnnouncementReaction[];
+}

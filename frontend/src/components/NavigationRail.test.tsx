@@ -27,7 +27,7 @@ it("marks exactly one primary item as current", () => {
 it("only highlights the active section and disables sections without a view", () => {
   setup("channels");
   const current = screen.getAllByRole("button").filter((b) => b.getAttribute("aria-current") === "page");
-  expect(current.map((b) => b.textContent)).toEqual(["Channels"]);
+  expect(current.map((b) => b.textContent)).toEqual(["Communities"]);
   expect(screen.getByRole("button", { name: "Chats" }).getAttribute("aria-current")).toBeNull();
   expect((screen.getByRole("button", { name: /Settings/ }) as HTMLButtonElement).disabled).toBe(true);
 });

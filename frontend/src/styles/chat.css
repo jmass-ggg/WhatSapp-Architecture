@@ -352,6 +352,14 @@
   background: #18c66a;
 }
 
+.avatar-presence.is-away {
+  background: #f5b301;
+}
+
+.avatar-presence.is-offline {
+  background: #94a3b8;
+}
+
 
 .messages-scroll {
   position: relative;

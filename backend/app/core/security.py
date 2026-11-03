@@ -83,6 +83,32 @@ def create_synapse_login_token(
     return token, f"@{localpart}:{settings.synapse_server_name}"
 
 
+def create_synapse_service_login_token(localpart: str, now: datetime | None = None) -> tuple[str, str]:
+    """Mint a short-lived Synapse JWT for a backend-only service identity.
+
+    The service identity never shares a localpart prefix with app users (``u_``), so no
+    application account can ever be mapped onto it.
+    """
+    if localpart.startswith("u_"):
+        raise ValueError("Service localparts must not collide with application user localparts")
+    issued_at = now or datetime.now(UTC)
+    payload = {
+        "sub": localpart,
+        "iss": settings.synapse_jwt_issuer,
+        "aud": [settings.synapse_jwt_audience],
+        "iat": issued_at,
+        "exp": issued_at + timedelta(seconds=settings.synapse_jwt_ttl_seconds),
+        "jti": uuid4().hex,
+        "display_name": "Channels",
+    }
+    token = jwt.encode(
+        payload,
+        settings.synapse_jwt_signing_key.get_secret_value(),
+        algorithm=settings.synapse_jwt_algorithm,
+    )
+    return token, f"@{localpart}:{settings.synapse_server_name}"
+
+
 def decode_access_token(token: str) -> UUID:
     payload = jwt.decode(
         token,

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserAvatar } from "../UserAvatar";
 import { MAX_ATTACHMENT_BYTES } from "../../services/matrix/attachments";
 import { fetchMatrixMedia } from "../../services/matrix/media";
+import { presenceLabel } from "../../services/matrix/presence";
 import type { RoomMemberInfo } from "../../services/matrix/members";
 import type { SharedAttachment, SharedContent } from "../../services/matrix/sharedContent";
 import type { Attachment, Conversation, MatrixSession } from "../../types";
@@ -106,7 +107,7 @@ export function ConversationInfoPanel({
   const [showAllFiles, setShowAllFiles] = useState(false);
   const token = matrixSession?.access_token;
   const isGroup = Boolean(conversation.isGroup);
-  const online = !isGroup && conversation.presence === "online";
+  const presenceText = isGroup ? undefined : presenceLabel(conversation.presence);
 
   useEffect(() => closeRef.current?.focus(), [conversation.id]);
   useEffect(() => {
@@ -155,7 +156,9 @@ export function ConversationInfoPanel({
             <h3>{conversation.name}</h3>
             {!isGroup && conversation.jobTitle && <p>{conversation.jobTitle}</p>}
             {isGroup && <p>{members.length} {members.length === 1 ? "member" : "members"}</p>}
-            {online && <span className="info-online-badge">Online</span>}
+            {presenceText && (
+              <span className={`info-online-badge${presenceText === "Online" ? "" : presenceText === "Away" ? " is-away" : " is-offline"}`}>{presenceText}</span>
+            )}
           </div>
         </section>
 

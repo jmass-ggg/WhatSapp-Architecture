@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -10,6 +10,11 @@ import { RegisterPage } from "./pages/RegisterPage";
 function PublicOnly() {
   const { isAuthenticated } = useAuth();
   return isAuthenticated ? <Navigate to="/chat" replace /> : <Outlet />;
+}
+
+function LegacyChannelRedirect() {
+  const { conversationId } = useParams<{ conversationId: string }>();
+  return <Navigate to={conversationId ? `/communities/${encodeURIComponent(conversationId)}` : "/communities"} replace />;
 }
 
 function RootRedirect() {
@@ -37,7 +42,10 @@ export function App() {
             <Route path="/groups" element={<ChatPage section="groups" />} />
             <Route path="/groups/:conversationId" element={<ChatPage section="groups" />} />
             <Route path="/contacts" element={<ChatPage section="contacts" />} />
-            <Route path="/channels" element={<ChatPage section="channels" />} />
+            <Route path="/communities" element={<ChatPage section="channels" />} />
+            <Route path="/communities/:conversationId" element={<ChatPage section="channels" />} />
+            <Route path="/channels" element={<Navigate to="/communities" replace />} />
+            <Route path="/channels/:conversationId" element={<LegacyChannelRedirect />} />
           </Route>
           <Route path="/" element={<RootRedirect />} />
           <Route path="*" element={<NotFound />} />

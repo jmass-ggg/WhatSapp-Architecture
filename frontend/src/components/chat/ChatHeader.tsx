@@ -2,6 +2,7 @@ import { ArrowLeft, MoreVertical, Pin, Search, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { UserAvatar } from "../UserAvatar";
+import { presenceLabel } from "../../services/matrix/presence";
 import type { Conversation, MatrixSession } from "../../types";
 
 function groupTypingStatus(names: string[]): string {
@@ -71,16 +72,17 @@ export function ChatHeader({
     );
   }
 
-  // Only a definite "online" from Synapse presence is shown; anything else shows no dot.
-  const online = !conversation.isGroup && conversation.presence === "online";
+  // Only a definite Synapse presence (online, away, offline) is shown; "unknown" shows the handle.
+  const presenceText = conversation.isGroup ? undefined : presenceLabel(conversation.presence);
+  const online = presenceText === "Online";
   const status = conversation.isTyping
     ? conversation.isGroup
       ? groupTypingStatus(conversation.typingNames ?? [])
       : "typing…"
     : conversation.isGroup
       ? conversation.bio ?? "Group"
-      : online
-        ? "Online"
+      : presenceText
+        ? presenceText
         : conversation.username
         ? `@${conversation.username}`
         : "";
@@ -98,7 +100,7 @@ export function ChatHeader({
       />
       <span className="chat-header-person">
         <h1>{conversation.name}</h1>
-        {status && <span className={conversation.isTyping ? "typing-text" : online ? "online-text" : ""}>{status}</span>}
+        {status && <span className={conversation.isTyping ? "typing-text" : online ? "online-text" : presenceText ? "presence-text" : ""}>{status}</span>}
       </span>
     </>
   );
